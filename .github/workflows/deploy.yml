@@ -1,69 +1,85 @@
 name: Kookie Chan
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+      - webserver
+    paths-ignore:
+      - '**/README.md'
+      - 'docs/**'
+      - '.github/**'
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: markelpher/kookiechan
+
+concurrency:
+  group: docker-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
-  build-and-push:
+  docker:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      # Checkout do código
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # Configura QEMU para emulação ARM
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      # Configura Docker Buildx
-      - name: Set up Docker Buildx
+      - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
 
-      # Login no Docker Hub
-      - name: Log in to Docker Hub
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Build e push da imagem multi-arch
-      - name: Build and push Docker image
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
+            type=raw,value=webserver,enable=${{ github.ref_name == 'webserver' }}
+
+      - name: Build local for testing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/dockerfile
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:test
+          cache-from: type=gha,scope=kookiechan-${{ github.ref_name }}
+          cache-to: type=gha,mode=max,scope=kookiechan-${{ github.ref_name }}
+
+      - name: Test image (Branch Specific)
+        run: |
+          echo "Verificando integridade na branch: ${{ github.ref_name }}"
+          if [ "${{ github.ref_name }}" = "webserver" ]; then
+            docker run --rm --platform linux/amd64 ${{ env.IMAGE_NAME }}:test \
+              python -c "import main; import webserver; print('Branch Webserver: OK!')"
+          else
+            docker run --rm --platform linux/amd64 ${{ env.IMAGE_NAME }}:test \
+              python -c "import main; print('Branch Main: OK!')"
+          fi
+
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./docker/dockerfile
           push: true
-          platforms: |
-            linux/amd64
-            linux/arm/v7
-            linux/arm64/v8
-          tags: |
-            markelpher/kookiechan:latest
-          build-args: |
-            FORCE_REBUILD=${{ github.run_id }}
+          pull: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha,scope=kookiechan-${{ github.ref_name }}
+          cache-to: type=gha,mode=max,scope=kookiechan-${{ github.ref_name }}
 
-      # Teste multi-arch
-      - name: Test multi-arch image
-        shell: bash
-        run: |
-          echo "Testing linux/amd64..."
-          docker run --rm --platform linux/amd64 markelpher/kookiechan:latest \
-            python -c "import sys; print(sys.platform, sys.version)"
-
-          echo "Testing linux/arm/v7..."
-          docker run --rm --platform linux/arm/v7 markelpher/kookiechan:latest \
-            python -c "import sys; print(sys.platform, sys.version)"
-
-          echo "Testing linux/arm64/v8..."
-          docker run --rm --platform linux/arm64/v8 markelpher/kookiechan:latest \
-            python -c "import sys; print(sys.platform, sys.version)"
-
-      # Notificação
-      - name: Notify
-        run: echo "Docker image multi-arch (amd64 + ARM v7/v8) built, pushed and tested successfully."
+      - name: Done
+        run: echo "Deploy finalizado para ${{ github.ref_name }}!"
