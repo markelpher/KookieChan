@@ -5,11 +5,15 @@ on:
     - cron: '0 0 1 12 *'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   update-project:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
 
     steps:
       - name: Checkout repository
@@ -27,14 +31,11 @@ jobs:
         id: versioning
         run: |
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.2.0")
-          
           MAJOR=$(echo $LAST_TAG | cut -d'.' -f1)
           MINOR=$(echo $LAST_TAG | cut -d'.' -f2)
           PATCH=$(echo $LAST_TAG | cut -d'.' -f3 | cut -d'-' -f1)
-          
           NEW_PATCH=$((PATCH + 1))
           NEW_TAG="${MAJOR}.${MINOR}.${NEW_PATCH}"
-          
           echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
           echo "DATE=$(date +'%d/%m/%Y')" >> $GITHUB_ENV
 
@@ -65,12 +66,13 @@ jobs:
           sed -i "s/FROM python:.*-slim/FROM python:${PYTHON_VERSION}-slim/" ./docker/dockerfile
 
           git add .
-          git commit -S -m "Manutenção: Python atualizado para a versão ${PYTHON_VERSION} e dependências atualizadas" || echo "No changes"
+          git commit -S -m "Manutenção: Python atualizado para ${PYTHON_VERSION} e dependências atualizadas" || echo "No changes"
+          
           git push origin main
 
       - name: Create New Tag
         run: |
-          git tag -s ${NEW_TAG} -m "Atualização das dependências do bot e da versão do Python para ${PYTHON_VERSION} - ${DATE}"
+          git tag -s ${NEW_TAG} -m "Atualização das dependências e da versão do Python para ${PYTHON_VERSION}"
           git push origin ${NEW_TAG}
 
       - name: Create GitHub release
@@ -79,15 +81,14 @@ jobs:
           ## 👻 Kookie Chan v${NEW_TAG}
 
           ### Versão anual de manutenção
-
-          ### Dependências
-          - Python atualizado para versão **${PYTHON_VERSION}**.
-          - Atualização das bibliotecas:
+          - Python atualizado para **${PYTHON_VERSION}**.
+          - Dependências do bot atualizadas automaticamente:
             - \`discord.py\`
             - \`aiohttp\`
             - \`beautifulsoup4\`
             - \`pymongo\`
             - \`python-dotenv\`
+          - Build Docker multi-arch (AMD64 & ARM64) atualizada.
           EOF
 
           gh release create ${NEW_TAG} \
