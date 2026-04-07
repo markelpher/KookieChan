@@ -1,10 +1,9 @@
-name: Kookie Chan
+name: Docker Image Build
 
 on:
   push:
     branches:
       - main
-      - webserver
     paths-ignore:
       - '**/README.md'
       - 'docs/**'
@@ -13,6 +12,8 @@ on:
 
 env:
   IMAGE_NAME: markelpher/kookiechan
+  CACHE_SCOPE: kookiechan-main
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 concurrency:
   group: docker-${{ github.ref_name }}
@@ -23,10 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: write 
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
@@ -43,8 +48,7 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
-            type=raw,value=webserver,enable=${{ github.ref_name == 'webserver' }}
+            type=raw,value=latest
 
       - name: Build local for testing
         uses: docker/build-push-action@v6
@@ -53,19 +57,25 @@ jobs:
           file: ./docker/dockerfile
           load: true
           tags: ${{ env.IMAGE_NAME }}:test
-          cache-from: type=gha,scope=kookiechan-${{ github.ref_name }}
-          cache-to: type=gha,mode=max,scope=kookiechan-${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
 
-      - name: Test image (Branch Specific)
+      - name: Test image
         run: |
-          echo "Verificando integridade na branch: ${{ github.ref_name }}"
-          if [ "${{ github.ref_name }}" = "webserver" ]; then
-            docker run --rm --platform linux/amd64 ${{ env.IMAGE_NAME }}:test \
-              python -c "import main; import webserver; print('Branch Webserver: OK!')"
-          else
-            docker run --rm --platform linux/amd64 ${{ env.IMAGE_NAME }}:test \
-              python -c "import main; print('Branch Main: OK!')"
-          fi
+          echo "Verificando integridade da imagem..."
+          docker run --rm --platform linux/amd64 ${{ env.IMAGE_NAME }}:test \
+            python -c "import main; print('Integridade da Main: OK!')"
+
+      - name: Cleanup Old Cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Limpando caches antigos do escopo: ${{ env.CACHE_SCOPE }}..."
+          ids=$(gh cache list --repo ${{ github.repository }} --key ${{ env.CACHE_SCOPE }} --json id -q '.[].id')
+          for id in $ids; do
+            echo "Deletando ID: $id"
+            gh cache delete $id --repo ${{ github.repository }}
+          done
+        continue-on-error: true
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -78,8 +88,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
-          cache-from: type=gha,scope=kookiechan-${{ github.ref_name }}
-          cache-to: type=gha,mode=max,scope=kookiechan-${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}
 
       - name: Done
-        run: echo "Deploy finalizado para ${{ github.ref_name }}!"
+        run: echo "Build multi-arch concluído, cache antigo removido e novo cache gerado!"

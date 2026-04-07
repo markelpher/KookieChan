@@ -25,12 +25,12 @@ services:
       - botnet
 
   watchtower:
-    image: containrrr/watchtower
+    image: nickfedor/watchtower:latest
     container_name: watchtower
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 60 bot   # Verifica atualizações a cada 60s
+    command: --interval 60 bot
     networks:
       - botnet
 

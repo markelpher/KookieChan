@@ -44,7 +44,22 @@ cd KookieChan
 pip install -r requirements.txt
 ```
 
-4. Configure o arquivo env do bot com seu token do Discord e ajustes necessários.
+4. Crie e configure o arquivo .env do bot com seu token do Discord e variaveis necessárias:
+
+```
+DISCORD_TOKEN=
+UPDATES_CHANNEL_ID=
+STATUS_CHANNEL_ID=
+KOOKIE_UPDATES_URL=
+KOOKIE_STATUS_URL=
+MONGO_URI=
+MONGO_DB=
+MONGO_UPDATES_COLLECTION=
+MONGO_STATUS_COLLECTION=
+MONGO_STATUS_LOGS_COLLECTION=
+MONGO_STATUS_ARCHIVE_COLLECTION=
+MONGO_UPDATES_ARCHIVE_COLLECTION=
+```
 
 ## Uso
 

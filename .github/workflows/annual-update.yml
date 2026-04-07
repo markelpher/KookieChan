@@ -1,0 +1,97 @@
+name: Annual Update Maintenance
+
+on:
+  schedule:
+    - cron: '0 0 1 12 *'
+  workflow_dispatch:
+
+jobs:
+  update-project:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.MY_PERSONAL_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Calculate New Version
+        id: versioning
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.2.0")
+          
+          MAJOR=$(echo $LAST_TAG | cut -d'.' -f1)
+          MINOR=$(echo $LAST_TAG | cut -d'.' -f2)
+          PATCH=$(echo $LAST_TAG | cut -d'.' -f3 | cut -d'-' -f1)
+          
+          NEW_PATCH=$((PATCH + 1))
+          NEW_TAG="${MAJOR}.${MINOR}.${NEW_PATCH}"
+          
+          echo "NEW_TAG=$NEW_TAG" >> $GITHUB_ENV
+          echo "DATE=$(date +'%d/%m/%Y')" >> $GITHUB_ENV
+
+      - name: Get latest Python version
+        run: |
+          FULL_VERSION=$(curl -s https://endoflife.date/api/python.json | jq -r '.[0].latest')
+          SHORT_VERSION=$(echo $FULL_VERSION | cut -d'.' -f1,2)
+          echo "PYTHON_VERSION=$SHORT_VERSION" >> $GITHUB_ENV
+
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
+      - name: Configure Git author
+        run: |
+          git config --global user.name "markelpher"
+          git config --global user.email "84909900+markelpher@users.noreply.github.com"
+          git config --global user.signingkey 8E97027279B03647
+
+      - name: Update main branch
+        run: |
+          git checkout main
+          sed -i "s/# Use Python .*/# Use Python ${PYTHON_VERSION}/" ./docker/dockerfile
+          sed -i "s/FROM python:.*-slim/FROM python:${PYTHON_VERSION}-slim/" ./docker/dockerfile
+
+          git add .
+          git commit -S -m "Manutenção: Python atualizado para a versão ${PYTHON_VERSION} e dependências atualizadas" || echo "No changes"
+          git push origin main
+
+      - name: Create New Tag
+        run: |
+          git tag -s ${NEW_TAG} -m "Atualização das dependências do bot e da versão do Python para ${PYTHON_VERSION} - ${DATE}"
+          git push origin ${NEW_TAG}
+
+      - name: Create GitHub release
+        run: |
+          cat <<EOF > release_notes.md
+          ## 👻 Kookie Chan v${NEW_TAG}
+
+          ### Versão anual de manutenção
+
+          ### Dependências
+          - Python atualizado para versão **${PYTHON_VERSION}**.
+          - Atualização das bibliotecas:
+            - \`discord.py\`
+            - \`aiohttp\`
+            - \`beautifulsoup4\`
+            - \`pymongo\`
+            - \`python-dotenv\`
+          EOF
+
+          gh release create ${NEW_TAG} \
+            --title "v${NEW_TAG}" \
+            --notes-file release_notes.md
+        env:
+          GH_TOKEN: ${{ secrets.MY_PERSONAL_TOKEN }}

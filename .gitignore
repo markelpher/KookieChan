@@ -1,45 +1,41 @@
-# Documentação e CI/CD
-.git
-.gitignore
-.github/
-docs/
-*.md
-LICENSE
-
-# Logs e caches Python
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 .pytest_cache/
 .mypy_cache/
+.coverage
+htmlcov/
 
 # Node
 node_modules/
+dist/
+build/
+npm-debug.log*
+yarn-error.log*
 
 # Ambientes virtuais
 .venv/
 venv/
 env/
 
-# Build e distribuição
-build/
-dist/
+# Build Python
 *.egg-info/
 pip-wheel-metadata/
 
-# Arquivos temporários
+# Temp
 *.swp
 *.tmp
 *.temp
 .DS_Store
-.cache/
+Thumbs.db
 
-# IDE's
+# IDE
 .vscode/
 .idea/
 
-# Variáveis sensíveis
+# Env / segredos
 .env
 .env.*
 *.pem
