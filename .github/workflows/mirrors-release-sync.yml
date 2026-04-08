@@ -1,0 +1,58 @@
+name: Multi-Platform Sync (Mirror Releases)
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout completo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install SSH Key
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.MIRROR_SSH_PRIVATE_KEY }}
+          known_hosts: 'placeholder'
+
+      - name: Adding Known Hosts
+        run: |
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
+          ssh-keyscan gitlab.com >> ~/.ssh/known_hosts
+
+      - name: Push Mirror (Commits & Tags)
+        run: |
+          git remote add codeberg git@codeberg.org:markelpher/KookieChan.git || true
+          git remote add gitlab git@gitlab.com:markelpher/kookiechan.git || true
+          
+          echo "Pushing to Codeberg..."
+          git push --force codeberg "refs/remotes/origin/*:refs/heads/*" "refs/tags/*:refs/tags/*"
+          
+          echo "Pushing to GitLab..."
+          git push --force gitlab "refs/remotes/origin/*:refs/heads/*" "refs/tags/*:refs/tags/*"
+      
+      - name: Create Release on GitLab
+        uses: release-hub/gitlab-release-action@v1
+        with:
+          project-id: ${{ secrets.GITLAB_PROJECT_ID }}
+          server-url: https://gitlab.com
+          access-token: ${{ secrets.GITLAB_ACCESS_TOKEN }}
+          tag-name: ${{ github.event.release.tag_name }}
+          release-name: "v${{ github.event.release.tag_name }}"
+          description: ${{ github.event.release.body }}
+
+      - name: Create Release on Codeberg (Gitea API)
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.CODEBERG_TOKEN }}
+          baseUrl: https://codeberg.org/api/v1
+          owner: markelpher
+          repo: KookieChan
+          allowUpdates: true
+          tag: ${{ github.event.release.tag_name }}
+          name: "v${{ github.event.release.tag_name }}"
+          body: ${{ github.event.release.body }}

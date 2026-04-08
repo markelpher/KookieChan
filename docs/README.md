@@ -18,7 +18,7 @@ Ele utiliza técnicas de scraping para realizar solicitações, acompanhar statu
 
 - Python
 
-- Bibliotecas de scraping (como requests e BeautifulSoup)
+- Bibliotecas de scraping (requests e BeautifulSoup)
 
 - Discord.py para integração com Discord
 
