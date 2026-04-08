@@ -30,29 +30,35 @@ jobs:
           git remote add gitlab git@gitlab.com:markelpher/kookiechan.git || true
           
           echo "Pushing to Codeberg..."
-          git push --force codeberg "refs/remotes/origin/*:refs/heads/*" "refs/tags/*:refs/tags/*"
+          git push --force codeberg main
+          git push --force codeberg --tags
           
           echo "Pushing to GitLab..."
-          git push --force gitlab "refs/remotes/origin/*:refs/heads/*" "refs/tags/*:refs/tags/*"
+          git push --force gitlab main
+          git push --force gitlab --tags
       
       - name: Create Release on GitLab
-        uses: release-hub/gitlab-release-action@v1
-        with:
-          project-id: ${{ secrets.GITLAB_PROJECT_ID }}
-          server-url: https://gitlab.com
-          access-token: ${{ secrets.GITLAB_ACCESS_TOKEN }}
-          tag-name: ${{ github.event.release.tag_name }}
-          release-name: "v${{ github.event.release.tag_name }}"
-          description: ${{ github.event.release.body }}
+        run: |
+          curl --request POST \
+            --header "PRIVATE-TOKEN: ${{ secrets.GITLAB_ACCESS_TOKEN }}" \
+            --header "Content-Type: application/json" \
+            --data "{
+              \"name\": \"${{ github.event.release.tag_name }}\",
+              \"tag_name\": \"${{ github.event.release.tag_name }}\",
+              \"description\": \"$(echo "${{ github.event.release.body }}" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')\"
+            }" \
+            "https://gitlab.com/api/v4/projects/${{ secrets.GITLAB_PROJECT_ID }}/releases"
 
-      - name: Create Release on Codeberg (Gitea API)
-        uses: ncipollo/release-action@v1
-        with:
-          token: ${{ secrets.CODEBERG_TOKEN }}
-          baseUrl: https://codeberg.org/api/v1
-          owner: markelpher
-          repo: KookieChan
-          allowUpdates: true
-          tag: ${{ github.event.release.tag_name }}
-          name: "v${{ github.event.release.tag_name }}"
-          body: ${{ github.event.release.body }}
+      - name: Create Release on Codeberg
+        run: |
+          curl --request POST \
+            --header "Authorization: token ${{ secrets.CODEBERG_TOKEN }}" \
+            --header "Content-Type: application/json" \
+            --data "{
+              \"name\": \"${{ github.event.release.tag_name }}\",
+              \"tag_name\": \"${{ github.event.release.tag_name }}\",
+              \"body\": \"$(echo "${{ github.event.release.body }}" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')\",
+              \"draft\": false,
+              \"prerelease\": false
+            }" \
+            "https://codeberg.org/api/v1/repos/markelpher/KookieChan/releases"
