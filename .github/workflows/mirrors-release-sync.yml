@@ -1,64 +1,89 @@
-name: Multi-Platform Sync (Mirror Releases)
+name: Multi-Platform Sync Releases
 
 on:
   release:
     types: [published]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  sync:
+  sync-releases:
     runs-on: ubuntu-latest
+
+    env:
+      TAG: ${{ github.event.release.tag_name }}
+      RELEASE_NAME: ${{ github.event.release.name || github.event.release.tag_name }}
+      RELEASE_BODY: ${{ github.event.release.body }}
+      PRERELEASE: ${{ github.event.release.prerelease }}
+      GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+      GITLAB_TOKEN: ${{ secrets.GITLAB_ACCESS_TOKEN }}
+      CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+      CODEBERG_REPO: markelpher/KookieChan
+
     steps:
-      - name: Checkout completo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install SSH Key
-        uses: shimataro/ssh-key-action@v2
-        with:
-          key: ${{ secrets.MIRROR_SSH_PRIVATE_KEY }}
-          known_hosts: 'placeholder'
-
-      - name: Adding Known Hosts
+      - name: Sync Release to GitLab
         run: |
-          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
-          ssh-keyscan gitlab.com >> ~/.ssh/known_hosts
+          BODY_JSON=$(jq -Rs . <<< "$RELEASE_BODY")
 
-      - name: Push Mirror (Commits & Tags)
-        run: |
-          git remote add codeberg git@codeberg.org:markelpher/KookieChan.git || true
-          git remote add gitlab git@gitlab.com:markelpher/kookiechan.git || true
-          
-          echo "Pushing to Codeberg..."
-          git push --force codeberg main
-          git push --force codeberg --tags
-          
-          echo "Pushing to GitLab..."
-          git push --force gitlab main
-          git push --force gitlab --tags
-      
-      - name: Create Release on GitLab
-        run: |
-          curl --request POST \
-            --header "PRIVATE-TOKEN: ${{ secrets.GITLAB_ACCESS_TOKEN }}" \
-            --header "Content-Type: application/json" \
-            --data "{
-              \"name\": \"${{ github.event.release.tag_name }}\",
-              \"tag_name\": \"${{ github.event.release.tag_name }}\",
-              \"description\": \"$(echo "${{ github.event.release.body }}" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')\"
-            }" \
-            "https://gitlab.com/api/v4/projects/${{ secrets.GITLAB_PROJECT_ID }}/releases"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+            "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/releases/$TAG")
 
-      - name: Create Release on Codeberg
+          if [ "$STATUS" = "200" ]; then
+            curl --request PUT \
+              --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+              --header "Content-Type: application/json" \
+              --data "{
+                \"name\": \"$RELEASE_NAME\",
+                \"description\": $BODY_JSON
+              }" \
+              "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/releases/$TAG"
+          else
+            curl --request POST \
+              --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+              --header "Content-Type: application/json" \
+              --data "{
+                \"name\": \"$RELEASE_NAME\",
+                \"tag_name\": \"$TAG\",
+                \"description\": $BODY_JSON
+              }" \
+              "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/releases"
+          fi
+
+      - name: Sync Release to Codeberg
         run: |
-          curl --request POST \
-            --header "Authorization: token ${{ secrets.CODEBERG_TOKEN }}" \
-            --header "Content-Type: application/json" \
-            --data "{
-              \"name\": \"${{ github.event.release.tag_name }}\",
-              \"tag_name\": \"${{ github.event.release.tag_name }}\",
-              \"body\": \"$(echo "${{ github.event.release.body }}" | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')\",
-              \"draft\": false,
-              \"prerelease\": false
-            }" \
-            "https://codeberg.org/api/v1/repos/markelpher/KookieChan/releases"
+          BODY_JSON=$(jq -Rs . <<< "$RELEASE_BODY")
+
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --header "Authorization: token $CODEBERG_TOKEN" \
+            "https://codeberg.org/api/v1/repos/$CODEBERG_REPO/releases/tags/$TAG")
+
+          if [ "$STATUS" = "200" ]; then
+            RELEASE_ID=$(curl -s \
+              --header "Authorization: token $CODEBERG_TOKEN" \
+              "https://codeberg.org/api/v1/repos/$CODEBERG_REPO/releases/tags/$TAG" \
+              | jq -r '.id')
+
+            curl --request PATCH \
+              --header "Authorization: token $CODEBERG_TOKEN" \
+              --header "Content-Type: application/json" \
+              --data "{
+                \"name\": \"$RELEASE_NAME\",
+                \"body\": $BODY_JSON,
+                \"prerelease\": $PRERELEASE
+              }" \
+              "https://codeberg.org/api/v1/repos/$CODEBERG_REPO/releases/$RELEASE_ID"
+          else
+            curl --request POST \
+              --header "Authorization: token $CODEBERG_TOKEN" \
+              --header "Content-Type: application/json" \
+              --data "{
+                \"name\": \"$RELEASE_NAME\",
+                \"tag_name\": \"$TAG\",
+                \"body\": $BODY_JSON,
+                \"draft\": false,
+                \"prerelease\": $PRERELEASE
+              }" \
+              "https://codeberg.org/api/v1/repos/$CODEBERG_REPO/releases"
+          fi
