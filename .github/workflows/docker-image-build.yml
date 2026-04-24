@@ -1,19 +1,16 @@
 name: Docker Image Build
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - '**/README.md'
-      - 'docs/**'
-      - '.github/**'
+  release:
+    types: [published]
   workflow_dispatch:
 
 env:
   IMAGE_NAME: markelpher/kookiechan
   CACHE_SCOPE: kookiechan-main
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  DOCKERHUB_NAMESPACE: markelpher
+  DOCKERHUB_REPO: kookiechan
 
 concurrency:
   group: docker-${{ github.ref_name }}
@@ -24,17 +21,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: write 
+      actions: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.sha }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -65,18 +67,6 @@ jobs:
           docker run --rm --platform linux/amd64 ${{ env.IMAGE_NAME }}:test \
             python -c "import main; print('Integridade da Main: OK!')"
 
-      - name: Cleanup Old Cache
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "Limpando caches antigos do escopo: ${{ env.CACHE_SCOPE }}..."
-          ids=$(gh cache list --repo ${{ github.repository }} --key ${{ env.CACHE_SCOPE }} --json id -q '.[].id')
-          for id in $ids; do
-            echo "Deletando ID: $id"
-            gh cache delete $id --repo ${{ github.repository }}
-          done
-        continue-on-error: true
-
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -91,5 +81,96 @@ jobs:
           cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }}
 
+      - name: Cleanup Old Cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Limpando caches antigos do escopo: ${{ env.CACHE_SCOPE }}..."
+          ids=$(gh cache list --repo ${{ github.repository }} --key ${{ env.CACHE_SCOPE }} --json id -q '.[].id')
+          for id in $ids; do
+            echo "Deletando ID: $id"
+            gh cache delete $id --repo ${{ github.repository }}
+          done
+        continue-on-error: true
+
+      - name: Cleanup old Docker Hub tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKERHUB_PAT: ${{ secrets.DOCKER_PASSWORD }}
+          DOCKERHUB_NAMESPACE: ${{ env.DOCKERHUB_NAMESPACE }}
+          DOCKERHUB_REPO: ${{ env.DOCKERHUB_REPO }}
+        run: |
+          set -euo pipefail
+
+          echo "Autenticando na API do Docker Hub..."
+          AUTH_PAYLOAD="$(
+            jq -nc \
+              --arg username "$DOCKERHUB_USERNAME" \
+              --arg password "$DOCKERHUB_PAT" \
+              '{username: $username, password: $password}'
+          )"
+
+          TOKEN="$(
+            curl -fsS https://hub.docker.com/v2/users/login \
+              -H 'Content-Type: application/json' \
+              -d "$AUTH_PAYLOAD" \
+            | jq -r '.token // .access_token'
+          )"
+
+          if [ -z "${TOKEN:-}" ] || [ "$TOKEN" = "null" ]; then
+            echo "Falha ao obter token JWT do Docker Hub"
+            exit 1
+          fi
+
+          echo "Listando tags do repositório..."
+          URL="https://hub.docker.com/v2/namespaces/${DOCKERHUB_NAMESPACE}/repositories/${DOCKERHUB_REPO}/tags?page_size=100"
+
+          ALL_TAGS="$(
+            while [ -n "${URL:-}" ] && [ "$URL" != "null" ]; do
+              RESP="$(curl -fsS "$URL" -H "Authorization: Bearer $TOKEN")"
+              echo "$RESP" | jq -c '.results[]'
+              URL="$(echo "$RESP" | jq -r '.next')"
+            done | jq -s '.'
+          )"
+
+          echo "Tags encontradas:"
+          echo "$ALL_TAGS" | jq -r '.[].name'
+
+          TAGS_TO_DELETE="$(
+            echo "$ALL_TAGS" | jq -r '
+              map(select(.name != "latest" and .name != "test"))
+              | .[].name
+            '
+          )"
+
+          if [ -z "${TAGS_TO_DELETE:-}" ]; then
+            echo "Nada para apagar."
+            exit 0
+          fi
+
+          echo "Tags antigas que serão apagadas:"
+          echo "$TAGS_TO_DELETE"
+
+          while IFS= read -r TAG; do
+            [ -z "$TAG" ] && continue
+
+            if [ "$TAG" = "latest" ]; then
+              echo "Pulando latest"
+              continue
+            fi
+
+            if [ "$TAG" = "test" ]; then
+              echo "Pulando test"
+              continue
+            fi
+
+            echo "Apagando tag: $TAG"
+            curl -fsS -X DELETE \
+              "https://hub.docker.com/v2/namespaces/${DOCKERHUB_NAMESPACE}/repositories/${DOCKERHUB_REPO}/tags/${TAG}" \
+              -H "Authorization: Bearer $TOKEN"
+
+            echo "Tag removida: $TAG"
+          done <<< "$TAGS_TO_DELETE"
+
       - name: Done
-        run: echo "Build multi-arch concluído, cache antigo removido e novo cache gerado!"
+        run: echo "Build multi-arch concluído, cache antigo removido, tags antigas limpas e nova imagem publicada!"

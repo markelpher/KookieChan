@@ -38,6 +38,7 @@ Thumbs.db
 # Env / segredos
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 *.crt

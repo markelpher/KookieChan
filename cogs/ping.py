@@ -27,7 +27,10 @@ class PingCog(commands.Cog):
         )
         embed.timestamp = discord.utils.utcnow()
 
-        await interaction.response.send_message(embed=embed)
+        try:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except discord.NotFound:
+            return
 
 
 async def setup(bot):

@@ -2,32 +2,29 @@ import discord
 from discord.ext import commands, tasks
 from discord import Embed
 from discord import app_commands
-from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
 import os
 from datetime import datetime
-import time
+from database.mongo import get_database
 
-from utils import get_site_status, ms_to_str, format_datetime_br, BR_TZ
-
-STATUS_CHANNEL_ID = int(os.getenv("STATUS_CHANNEL_ID"))
-KOOKIE_STATUS_URL = os.getenv("KOOKIE_STATUS_URL")
-MONGO_URI = os.getenv("MONGO_URI")
-DB_NAME = os.getenv("MONGO_DB")
+from utils import get_site_status, ms_to_str, format_datetime_br, BR_TZ, get_config
 
 COLL_STATE = os.getenv("MONGO_STATUS_COLLECTION", "status")
 COLL_LOGS = os.getenv("MONGO_STATUS_LOGS_COLLECTION", "status_logs")
 COLL_ARCHIVE = os.getenv("MONGO_STATUS_ARCHIVE_COLLECTION", "status_logs_archive")
+STATUS_EMBED_TITLE = "Status do Kookie"
 
 
 class StatusCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        db = AsyncIOMotorClient(MONGO_URI)[DB_NAME]
-        self.db_state = db[COLL_STATE]
-        self.db_logs = db[COLL_LOGS]
-        self.db_archive = db[COLL_ARCHIVE]
+        self.db = get_database()
+        self.db_state = self.db[COLL_STATE]
+        self.db_logs = self.db[COLL_LOGS]
+        self.db_archive = self.db[COLL_ARCHIVE]
 
         self.monitor_started = False
+        self.pending_status_ping_task = None
 
         # Estado base
         self.state = {
@@ -75,9 +72,10 @@ class StatusCog(commands.Cog):
         color = 0x00FF00 if online else 0xFF0000
         icon = "🟢" if online else "🔴"
 
+        url_status = s.get("config", {}).get("kookie_status_url", os.getenv("KOOKIE_STATUS_URL"))
         embed = Embed(
-            title="Status do Kookie",
-            url=KOOKIE_STATUS_URL,
+            title=STATUS_EMBED_TITLE,
+            url=url_status,
             color=color
         )
 
@@ -105,14 +103,12 @@ class StatusCog(commands.Cog):
             )
 
         embed.add_field(name="Total de quedas", value=str(s["downtimes_count"]), inline=True)
-        embed.add_field(name="Tempo total online", value=ms_to_str(s["total_online"] * 1000), inline=True)
-        embed.add_field(name="Tempo total offline", value=ms_to_str(s["total_offline"] * 1000), inline=True)
 
         return embed
 
     # -------------------- Mensagem fixa --------------------
-    async def get_status_message(self):
-        channel = self.bot.get_channel(STATUS_CHANNEL_ID)
+    async def get_status_message(self, channel_id):
+        channel = self.bot.get_channel(channel_id)
         if not channel:
             return None
 
@@ -120,7 +116,11 @@ class StatusCog(commands.Cog):
         if msg_id:
             try:
                 msg = await channel.fetch_message(msg_id)
-                if msg.author.id == self.bot.user.id:
+                if (
+                    msg.author.id == self.bot.user.id
+                    and msg.embeds
+                    and (msg.embeds[0].title or "") == STATUS_EMBED_TITLE
+                ):
                     return msg
                 else:
                     self.state["status_message_id"] = None
@@ -136,7 +136,7 @@ class StatusCog(commands.Cog):
             async for msg in channel.history(limit=200):
                 if msg.author.id == self.bot.user.id and msg.embeds:
                     e = msg.embeds[0]
-                    if e.title and "Status do Kookie" in e.title:
+                    if (e.title or "") == STATUS_EMBED_TITLE:
                         self.state["status_message_id"] = msg.id
                         await self.save_state()
                         print("🔁 Mensagem de status recuperada automaticamente (id salvo).")
@@ -145,6 +145,106 @@ class StatusCog(commands.Cog):
             print("⚠️ Erro ao procurar mensagem no canal:", e)
 
         return None
+
+    async def delete_pin_notification(self, channel, pinned_message_id=None):
+        try:
+            async for msg in channel.history(limit=25):
+                if msg.type != discord.MessageType.pins_add:
+                    continue
+                if msg.author.id != self.bot.user.id:
+                    continue
+                await msg.delete()
+        except Exception as e:
+            print("⚠️ Falha ao apagar notificação de mensagem fixada:", e)
+
+    async def sync_status_pin(self, channel, message):
+        if not channel or not message:
+            return
+
+        try:
+            pinned_messages = await channel.pins()
+        except Exception as e:
+            print("⚠️ Falha ao carregar mensagens fixadas:", e)
+            pinned_messages = []
+
+        already_pinned = False
+        for pinned in pinned_messages:
+            if pinned.id == message.id:
+                already_pinned = True
+                continue
+            if pinned.author.id != self.bot.user.id:
+                continue
+
+            try:
+                await pinned.unpin(reason="Substituindo mensagem fixa de status")
+            except Exception as e:
+                print("⚠️ Falha ao desafixar mensagem antiga de status:", e)
+
+        if already_pinned:
+            return
+
+        try:
+            await message.pin(reason="Mensagem fixa de status do Kookie")
+            await self.delete_pin_notification(channel, message.id)
+        except discord.HTTPException as e:
+            # Ignora erro de mensagem já fixada e segue o fluxo.
+            if getattr(e, "code", None) != 30003:
+                print("⚠️ Falha ao fixar mensagem de status:", e)
+        except Exception as e:
+            print("⚠️ Falha ao fixar mensagem de status:", e)
+
+    async def send_status_ping_notification(
+        self,
+        channel,
+        message,
+        role_id,
+        expected_online,
+        expected_change_ts,
+        validation_delay=8,
+        delete_delay=5
+    ):
+        if not channel or not role_id:
+            return
+
+        try:
+            await asyncio.sleep(validation_delay)
+
+            if self.state.get("online") != expected_online:
+                return
+            if self.state.get("last_status_change") != expected_change_ts:
+                return
+
+            status_text = "ONLINE" if expected_online else "OFFLINE"
+            sent = await channel.send(content=f"<@&{role_id}> Status do Kookie mudou para {status_text}.")
+
+            await asyncio.sleep(delete_delay)
+            await sent.delete()
+
+            if self.state.get("online") != expected_online:
+                return
+            if self.state.get("last_status_change") != expected_change_ts:
+                return
+
+            refreshed_message = message
+            if message:
+                try:
+                    refreshed_message = await channel.fetch_message(message.id)
+                except Exception:
+                    refreshed_message = message
+
+            if refreshed_message:
+                try:
+                    await refreshed_message.edit(
+                        content=f"<@&{role_id}>",
+                        embed=self.build_embed(self.state)
+                    )
+                    await self.sync_status_pin(channel, refreshed_message)
+                except Exception as e:
+                    print("⚠️ Falha ao aplicar menção visual na mensagem fixa:", e)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            print("⚠️ Falha ao enviar/apagar notificação de ping de status:", e)
 
     # -------------------- Atualização de estado --------------------
     async def update_state(self, st):
@@ -164,9 +264,9 @@ class StatusCog(commands.Cog):
 
         if status_changed:
             if prev_online:
-                self.state["total_online"] += self.state["continuous_online"] + delta
+                self.state["total_online"] = self.state["continuous_online"] + delta
             else:
-                self.state["total_offline"] += self.state["continuous_offline"] + delta
+                self.state["total_offline"] = self.state["continuous_offline"] + delta
 
             self.state["continuous_online"] = 0
             self.state["continuous_offline"] = 0
@@ -198,14 +298,32 @@ class StatusCog(commands.Cog):
         print(f"   Tempo total {'online' if self.state['online'] else 'offline'}: {ms_to_str(total_time*1000)}")
         print(f"   Total de quedas: {self.state['downtimes_count']}")
 
-        # Atualiza embed
-        msg = await self.get_status_message()
-        channel = self.bot.get_channel(STATUS_CHANNEL_ID)
+        # Configurações dinâmicas
+        chan_id = await get_config(self.db, "status_channel_id", int(os.getenv("STATUS_CHANNEL_ID")))
+        self.state["config"] = {"kookie_status_url": await get_config(self.db, "kookie_status_url", os.getenv("KOOKIE_STATUS_URL"))}
+        
+        # Atualiza embed e envia ping se necessário
+        msg = await self.get_status_message(chan_id)
+        channel = self.bot.get_channel(chan_id)
         embed = self.build_embed(self.state)
+
+        role_id = None
+        status_ping_enabled = await get_config(self.db, "status_ping_enabled", False)
+        if status_changed:
+            role_id = await get_config(self.db, "status_role_id") if status_ping_enabled else None
+            if self.pending_status_ping_task and not self.pending_status_ping_task.done():
+                self.pending_status_ping_task.cancel()
+
+        current_content = None
+        if msg and msg.author.id == self.bot.user.id:
+            current_content = msg.content or None
+        if not status_ping_enabled:
+            current_content = None
 
         if msg:
             try:
-                await msg.edit(embed=embed)
+                await msg.edit(content=current_content, embed=embed)
+                await self.sync_status_pin(channel, msg)
             except Exception:
                 print("⚠️ Falha ao editar mensagem existente.")
         else:
@@ -213,13 +331,27 @@ class StatusCog(commands.Cog):
                 sent = await channel.send(embed=embed)
                 self.state["status_message_id"] = sent.id
                 await self.save_state()
+                await self.sync_status_pin(channel, sent)
+                msg = sent
                 print("📤 Embed enviado no canal e id salvo.")
+
+        if status_changed and role_id and channel and msg:
+            self.pending_status_ping_task = self.bot.loop.create_task(
+                self.send_status_ping_notification(
+                    channel,
+                    msg,
+                    role_id,
+                    self.state["online"],
+                    self.state["last_status_change"]
+                )
+            )
 
     # -------------------- Monitor --------------------
     @tasks.loop(seconds=60)
     async def monitor(self):
+        url = await get_config(self.db, "kookie_status_url", os.getenv("KOOKIE_STATUS_URL"))
         try:
-            st = await get_site_status(KOOKIE_STATUS_URL)
+            st = await get_site_status(url)
         except:
             st = None
         await self.update_state(st)
@@ -234,13 +366,17 @@ class StatusCog(commands.Cog):
         description="Mostra o status atual do Kookie"
     )
     async def status_cmd(self, interaction: discord.Interaction):
-        msg = await self.get_status_message()
+        await interaction.response.defer(ephemeral=True)
+
+        chan_id = await get_config(self.db, "status_channel_id", int(os.getenv("STATUS_CHANNEL_ID")))
+        msg = await self.get_status_message(chan_id)
         if msg:
-            await interaction.response.send_message(embed=msg.embeds[0], ephemeral=True)
+            await interaction.followup.send(embed=msg.embeds[0], ephemeral=True)
             return
 
+        self.state["config"] = {"kookie_status_url": await get_config(self.db, "kookie_status_url", os.getenv("KOOKIE_STATUS_URL"))}
         embed = self.build_embed(self.state)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # -------------------- READY --------------------
     @commands.Cog.listener()
@@ -250,18 +386,29 @@ class StatusCog(commands.Cog):
 
         await self.load_state()
 
-        # Recupera mensagem existente ou busca manualmente
-        msg = await self.get_status_message()
+        # Configurações dinâmicas
+        chan_id = await get_config(self.db, "status_channel_id", int(os.getenv("STATUS_CHANNEL_ID")))
+        url = await get_config(self.db, "kookie_status_url", os.getenv("KOOKIE_STATUS_URL"))
+        self.state["config"] = {"kookie_status_url": url}
 
-        # Atualiza tempo contínuo desde a última mudança
+        # Recupera mensagem existente ou busca manualmente
+        msg = await self.get_status_message(chan_id)
+
+        # Reconcilia o tempo que o bot ficou desligado
         now_dt = datetime.now(BR_TZ)
-        last_change = self.state.get("last_status_change")
-        if last_change:
-            delta = now_dt.timestamp() - last_change
-            if self.state.get("online"):
-                self.state["continuous_online"] += delta
-            else:
-                self.state["continuous_offline"] += delta
+        last_update_ts = self.state.get("last_status_change")
+        
+        if last_update_ts:
+            delta = now_dt.timestamp() - last_update_ts
+            if delta > 0:
+                if self.state.get("online"):
+                    self.state["continuous_online"] += delta
+                    print(f"⏳ Bot ficou desligado por {delta:.2f}s. Somado ao tempo contínuo ONLINE.")
+                else:
+                    self.state["continuous_offline"] += delta
+                    print(f"⏳ Bot ficou desligado por {delta:.2f}s. Somado ao tempo contínuo OFFLINE.")
+        
+        # Atualiza a marca temporal para o presente
         self.state["last_status_change"] = now_dt.timestamp()
         await self.save_state()
 
@@ -269,21 +416,23 @@ class StatusCog(commands.Cog):
         if msg:
             embed = self.build_embed(self.state)
             try:
-                await msg.edit(embed=embed)
+                await msg.edit(content=msg.content or None, embed=embed)
+                await self.sync_status_pin(self.bot.get_channel(chan_id), msg)
             except Exception as e:
                 print("⚠️ Falha ao atualizar mensagem existente:", e)
         else:
-            channel = self.bot.get_channel(STATUS_CHANNEL_ID)
+            channel = self.bot.get_channel(chan_id)
             if channel:
                 embed = self.build_embed(self.state)
                 sent = await channel.send(embed=embed)
                 self.state["status_message_id"] = sent.id
                 await self.save_state()
+                await self.sync_status_pin(channel, sent)
                 print("📤 Embed enviado no canal e id salvo.")
 
         # Primeira verificação antes do loop
         try:
-            st = await get_site_status(KOOKIE_STATUS_URL)
+            st = await get_site_status(url)
         except:
             st = None
         await self.update_state(st)

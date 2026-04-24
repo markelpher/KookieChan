@@ -2,15 +2,13 @@ import discord
 from discord.ext import commands
 from discord import Embed, app_commands, Interaction
 from discord.ui import View, Button
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 from datetime import datetime
-from utils import ms_to_str, format_datetime_br  # Assumindo que você já tenha essas funções
+from database.mongo import get_database
+from utils import format_datetime_br
 
-MONGO_URI = os.getenv("MONGO_URI")
-DB_NAME = os.getenv("MONGO_DB")
 COLL_STATUS_LOGS = os.getenv("MONGO_STATUS_LOGS_COLLECTION", "status_logs")
-COLL_UPDATES = os.getenv("MONGO_UPDATES_COLLECTION", "updates")
+COLL_UPDATE = os.getenv("MONGO_UPDATE_COLLECTION", "update")
 
 
 class HistoryView(View):
@@ -56,9 +54,9 @@ class HistoryView(View):
 class HistoryCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        db = AsyncIOMotorClient(MONGO_URI)[DB_NAME]
+        db = get_database()
         self.db_status = db[COLL_STATUS_LOGS]
-        self.db_updates = db[COLL_UPDATES]
+        self.db_update = db[COLL_UPDATE]
 
     def build_status_embed(self, log):
         # Converte timestamp para datetime se necessário
@@ -74,7 +72,7 @@ class HistoryCog(commands.Cog):
         embed.set_footer(text=f"Verificado em: {format_datetime_br(ts.timestamp())}")
         return embed
 
-    def build_updates_embed(self, update):
+    def build_update_embed(self, update):
         # Garante que update['date'] seja datetime
         dt = update["date"] if isinstance(update["date"], datetime) else datetime.utcfromtimestamp(update["date"])
         embed = Embed(
@@ -88,33 +86,43 @@ class HistoryCog(commands.Cog):
 
     @commands.hybrid_command(
         name="historico",
-        description="Mostra o histórico de status ou updates do Kookie"
+        description="Mostra o histórico de status ou update do Kookie"
     )
     @app_commands.choices(tipo=[
         app_commands.Choice(name="status", value="status"),
-        app_commands.Choice(name="updates", value="updates")
+        app_commands.Choice(name="update", value="update")
     ])
     async def historico(self, ctx, tipo: app_commands.Choice[str]):
-        await ctx.interaction.response.defer(ephemeral=True)
+        if ctx.interaction:
+            await ctx.interaction.response.defer(ephemeral=True)
 
         if tipo.value == "status":
             cursor = self.db_status.find().sort("timestamp", -1).limit(20)
             logs = await cursor.to_list(length=20)
             if not logs:
-                await ctx.interaction.followup.send("Nenhum histórico de status encontrado.", ephemeral=True)
+                if ctx.interaction:
+                    await ctx.interaction.followup.send("Nenhum histórico de status encontrado.", ephemeral=True)
+                else:
+                    await ctx.send("Nenhum histórico de status encontrado.")
                 return
             embeds = [self.build_status_embed(log) for log in logs]
 
-        elif tipo.value == "updates":
-            cursor = self.db_updates.find().sort("timestamp", -1).limit(20)
+        elif tipo.value == "update":
+            cursor = self.db_update.find().sort("timestamp", -1).limit(20)
             logs = await cursor.to_list(length=20)
             if not logs:
-                await ctx.interaction.followup.send("Nenhum histórico de updates encontrado.", ephemeral=True)
+                if ctx.interaction:
+                    await ctx.interaction.followup.send("Nenhum histórico de update encontrado.", ephemeral=True)
+                else:
+                    await ctx.send("Nenhum histórico de update encontrado.")
                 return
-            embeds = [self.build_updates_embed(log) for log in logs]
+            embeds = [self.build_update_embed(log) for log in logs]
 
         view = HistoryView(ctx, embeds)
-        await ctx.interaction.followup.send(embed=embeds[0], view=view, ephemeral=True)
+        if ctx.interaction:
+            await ctx.interaction.followup.send(embed=embeds[0], view=view, ephemeral=True)
+        else:
+            await ctx.send(embed=embeds[0], view=view)
 
 
 async def setup(bot):
