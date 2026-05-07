@@ -2,7 +2,10 @@ name: Mirror to Codeberg and GitLab
 
 on:
   push:
-    branches: ["main"]
+    branches:
+      - "**"
+  workflow_call:
+  workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -11,9 +14,17 @@ jobs:
   git-mirror:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Refresh GitHub refs
+        run: git fetch origin "+refs/heads/*:refs/mirror/heads/*" "+refs/tags/*:refs/tags/*" --prune --prune-tags
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
 
       - name: Install SSH Key
         uses: shimataro/ssh-key-action@v2
@@ -29,9 +40,9 @@ jobs:
       - name: Mirror to Codeberg
         run: |
           git remote add codeberg git@codeberg.org:markelpher/KookieChan.git || true
-          git push --force codeberg "refs/remotes/origin/main:refs/heads/main" "refs/tags/*:refs/tags/*"
+          git push --force --prune codeberg "refs/mirror/heads/*:refs/heads/*" "refs/tags/*:refs/tags/*"
 
       - name: Mirror to GitLab
         run: |
           git remote add gitlab git@gitlab.com:markelpher/kookiechan.git || true
-          git push --force gitlab "refs/remotes/origin/main:refs/heads/main" "refs/tags/*:refs/tags/*"
+          git push --force --prune gitlab "refs/mirror/heads/*:refs/heads/*" "refs/tags/*:refs/tags/*"

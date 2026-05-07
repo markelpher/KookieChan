@@ -1,0 +1,76 @@
+name: Multi-Platform Sync Releases
+
+on:
+  release:
+    types:
+      - published
+      - edited
+      - deleted
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    name: Verify release tag target
+    runs-on: ubuntu-latest
+    outputs:
+      tag_sha: ${{ steps.tag.outputs.tag_sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve GitHub release tag SHA
+        id: tag
+        if: github.event.action != 'deleted'
+        run: |
+          git fetch origin "+refs/heads/main:refs/remotes/origin/main" "+refs/tags/${{ github.event.release.tag_name }}:refs/tags/${{ github.event.release.tag_name }}"
+          TAG_SHA="$(git rev-list -n 1 "${{ github.event.release.tag_name }}")"
+          MAIN_SHA="$(git rev-parse origin/main)"
+          echo "tag_sha=$TAG_SHA" >> "$GITHUB_OUTPUT"
+          if [ "$TAG_SHA" != "$MAIN_SHA" ]; then
+            gh release delete "${{ github.event.release.tag_name }}" --yes --cleanup-tag
+            echo "Release tag points to $TAG_SHA but latest main is $MAIN_SHA; deleted stale GitHub release/tag."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.MY_PERSONAL_TOKEN }}
+
+  git-mirror:
+    name: Sync Git refs first
+    needs: preflight
+    uses: ./.github/workflows/mirrors.yml
+    secrets: inherit
+
+  sync-releases:
+    name: Sync release metadata
+    runs-on: ubuntu-latest
+    needs:
+      - preflight
+      - git-mirror
+    env:
+      GITHUB_TAG_SHA: ${{ needs.preflight.outputs.tag_sha }}
+      GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+      GITLAB_ACCESS_TOKEN: ${{ secrets.GITLAB_ACCESS_TOKEN }}
+      GITLAB_API_URL: ${{ vars.GITLAB_API_URL }}
+      CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+      CODEBERG_API_URL: ${{ vars.CODEBERG_API_URL }}
+      MIRROR_CODEBERG_OWNER_REPO: ${{ vars.MIRROR_CODEBERG_OWNER_REPO || 'markelpher/kookiechan' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Sync GitHub release to GitLab and Codeberg
+        run: python .github/scripts/sync_releases.py

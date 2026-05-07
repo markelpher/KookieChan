@@ -1,6 +1,7 @@
 name: Docker Image Build
 
 on:
+  workflow_call:
   release:
     types: [published]
   workflow_dispatch:
@@ -17,8 +18,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  sync-before-manual-build:
+    name: Sync refs before manual build
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/mirrors.yml
+    secrets: inherit
+
   docker:
     runs-on: ubuntu-latest
+    needs: sync-before-manual-build
+    if: always() && !cancelled() && (github.event_name != 'workflow_dispatch' || needs.sync-before-manual-build.result == 'success')
     permissions:
       contents: read
       actions: write
@@ -165,12 +174,30 @@ jobs:
             fi
 
             echo "Apagando tag: $TAG"
-            curl -fsS -X DELETE \
-              "https://hub.docker.com/v2/namespaces/${DOCKERHUB_NAMESPACE}/repositories/${DOCKERHUB_REPO}/tags/${TAG}" \
-              -H "Authorization: Bearer $TOKEN"
+            ENCODED_TAG="$(jq -rn --arg tag "$TAG" '$tag|@uri')"
+            HTTP_STATUS="$(
+              curl -sS -o /tmp/dockerhub-delete-response.txt -w '%{http_code}' -X DELETE \
+                "https://hub.docker.com/v2/namespaces/${DOCKERHUB_NAMESPACE}/repositories/${DOCKERHUB_REPO}/tags/${ENCODED_TAG}" \
+                -H "Authorization: Bearer $TOKEN" || true
+            )"
 
-            echo "Tag removida: $TAG"
+            case "$HTTP_STATUS" in
+              200|202|204)
+                echo "Tag removida: $TAG"
+                ;;
+              404)
+                echo "Tag já não existe: $TAG"
+                ;;
+              401|403)
+                echo "::warning::Sem permissão para apagar a tag '$TAG' no Docker Hub (HTTP $HTTP_STATUS). Verifique se o token tem permissão de delete."
+                ;;
+              *)
+                echo "::warning::Falha ao apagar a tag '$TAG' no Docker Hub (HTTP $HTTP_STATUS)."
+                cat /tmp/dockerhub-delete-response.txt || true
+                ;;
+            esac
           done <<< "$TAGS_TO_DELETE"
+        continue-on-error: true
 
       - name: Done
         run: echo "Build multi-arch concluído, cache antigo removido, tags antigas limpas e nova imagem publicada!"
