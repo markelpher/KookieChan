@@ -1,15 +1,32 @@
-# 🐳 Guia Docker para a Kookie Chan
+# Guia Docker da Kookie Chan
 
-## Este guia explica como rodar o bot em Docker, usando docker-compose, com atualização automática de código e dependências via GitHub Actions e Watchtower.
+Este guia explica como rodar a Kookie Chan com Docker Compose usando a imagem `markelpher/kookiechan:latest`, MongoDB e Watchtower para atualização automática do container.
 
 > [!WARNING]
-> Mantenha arquivos sensíveis como .env fora do Dockerfile para segurança.
+> Mantenha arquivos sensíveis, como `.env`, fora do `dockerfile`. O projeto já usa `env_file` no Compose para carregar as variáveis em tempo de execução.
 
-## 1. Dockerfile otimizado
+## 1. Estrutura Docker do projeto
 
-- Crie Dockerfile:
+Os arquivos Docker ficam dentro da pasta `docker/`:
 
+```text
+KookieChan/
+├── docker/
+│   ├── dockerfile
+│   └── docker-compose.yml
+├── cogs/
+├── database/
+├── main.py
+├── utils.py
+├── requirements.txt
+└── .env.example
 ```
+
+## 2. Dockerfile
+
+O arquivo `docker/dockerfile` define a imagem da Kookie Chan:
+
+```dockerfile
 FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -38,25 +55,22 @@ ARG FORCE_REBUILD
 CMD ["python", "main.py"]
 ```
 
-# Benefícios:
+Principais pontos:
 
-- Atualiza dependências no build
+- Usa `python:3.14-slim` para manter a imagem menor.
+- Instala as dependências do `requirements.txt` durante o build.
+- Copia `main.py`, `utils.py`, `cogs/` e `database/` para dentro de `/app`.
+- Executa o bot com `python main.py`.
 
-- Cache otimizado
+## 3. Docker Compose
 
-- Imagem leve (Python slim)
+O arquivo `docker/docker-compose.yml` sobe três serviços:
 
-- Cria imagem docker multi-arch (suporta Linux e ARM)
-
-- Evita criação de arquivos .pyc
-
-## 2. docker-compose.yml completo:
-
-```
+```yaml
 services:
   bot:
-    image: meuusuario/meubot:latest
-    container_name: meubot
+    image: markelpher/kookiechan:latest
+    container_name: kookiechan
     restart: unless-stopped
     env_file:
       - ../.env
@@ -68,24 +82,26 @@ services:
       - botnet
 
   mongo:
-    image: mongo:6
+    image: mongo:latest
     container_name: mongodb
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: senha
+    ports:
+      - "27017:27017"
     volumes:
       - mongo_data:/data/db
     networks:
       - botnet
 
   watchtower:
-    image: containrrr/watchtower
+    image: nickfedor/watchtower:latest
     container_name: watchtower
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 60 bot   # Verifica atualizações a cada 60s
+    command: --interval 60 bot
     networks:
       - botnet
 
@@ -96,166 +112,88 @@ networks:
   botnet:
 ```
 
-# Benefícios:
+Serviços:
 
-- Persistência de dados
+- `bot`: container principal da Kookie Chan.
+- `mongo`: banco MongoDB usado para persistência.
+- `watchtower`: verifica atualizações da imagem e reinicia o bot quando houver uma versão nova.
 
-- Watchtower atualiza automaticamente o bot
+## 4. Variáveis de ambiente
 
-- Reinício automático em caso de falha
+Crie um arquivo `.env` na raiz do projeto com base em `.env.example`.
 
-- Rede interna isolada
+Para usar o MongoDB do Compose, a URI pode apontar para o serviço `mongo`:
 
-# 3. GitHub Actions – Build e Push automático
-
-- Crie .github/workflows/deploy.yml:
-
-```
-name: Docker Image Build Push
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-
-jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
-
-    steps:
-      # Checkout do código
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # Configura QEMU para emulação ARM
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      # Configura Docker Buildx
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker-container
-
-      # Login no Docker Hub
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      # Build e push da imagem multi-arch
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./docker/dockerfile
-          push: true
-          platforms: |
-            linux/amd64
-            linux/arm/v7
-            linux/arm64/v8
-          tags: |
-            meuusuario/meubot:latest
-          build-args: |
-            FORCE_REBUILD=${{ github.run_id }}
-
-      # Teste multi-arch
-      - name: Test multi-arch image
-        shell: bash
-        run: |
-          echo "Testing linux/amd64..."
-          docker run --rm --platform linux/amd64 markelpher/kookiechan:latest \
-            python -c "import sys; print(sys.platform, sys.version)"
-
-          echo "Testing linux/arm/v7..."
-          docker run --rm --platform linux/arm/v7 markelpher/kookiechan:latest \
-            python -c "import sys; print(sys.platform, sys.version)"
-
-          echo "Testing linux/arm64/v8..."
-          docker run --rm --platform linux/arm64/v8 markelpher/kookiechan:latest \
-            python -c "import sys; print(sys.platform, sys.version)"
-
-      # Notificação
-      - name: Notify
-        run: echo "Docker image multi-arch (amd64 + ARM v7/v8) built, pushed and tested successfully."
+```env
+MONGO_URI=mongodb://root:senha@mongo:27017/
+MONGO_DB=kookiechan
 ```
 
-# Benefícios:
+Mantenha também as variáveis do Discord e URLs do Kookie:
 
-- Atualiza código e dependências automaticamente
-
-- Tag SHA permite rastrear versões
-
-- Tag latest permite Watchtower atualizar container na VPS
-
-- Suporte multi-arch (Linux & ARM)
-
-# 4. Configurar Secrets no GitHub
-
-- No repositório → Settings → Secrets → Actions → New repository secret:
-
-DOCKER_USERNAME	/ Seu usuário Docker Hub
-
-DOCKER_PASSWORD	/ Senha ou token Docker Hub
-
-IMAGE_NAME	/ Nome completo da imagem, ex: meuusuario/meubot
-
-# 5. Rodando o bot na VPS
-
-- Subir os serviços:
-
-```
-docker compose up -d
+```env
+DISCORD_TOKEN=
+UPDATE_CHANNEL_ID=
+STATUS_CHANNEL_ID=
+KOOKIE_UPDATE_URL=https://kookie.app/announcements
+KOOKIE_STATUS_URL=https://kookie.app
 ```
 
-- Ver logs do bot:
+## 5. Rodando com Docker
 
-```
-docker compose logs -f bot
-```
+Na raiz do projeto, suba os containers:
 
-# 6. Variáveis de ambiente
-
-- Crie .env com:
-
-```
-DISCORD_TOKEN=seu_token
+```bash
+docker compose -f docker/docker-compose.yml up -d
 ```
 
-```
-MONGO_URI=mongodb://root:senha@mongodb:27017/
-```
+Para recriar os containers e buscar a imagem mais recente:
 
-```
-OTHER_VAR=valor
-```
-
-- No docker-compose.yml:
-
-```
-env_file:
-  - .env
-  ```
-
-# 7. Dicas de produção
-
-- Use tags SHA para rollback rápido
-
-- Faça backup do volume mongo_data
-
-- Teste localmente:
-
-```
-docker build -t meuusuario/meubot:latest .
+```bash
+docker compose -f docker/docker-compose.yml pull
+docker compose -f docker/docker-compose.yml up -d
 ```
 
-```
-docker run -it --rm --env-file .env meuusuario/meubot:latest
+Para acompanhar os logs do bot:
+
+```bash
+docker compose -f docker/docker-compose.yml logs -f bot
 ```
 
-- Monitore logs do Watchtower:
+Para parar tudo:
 
+```bash
+docker compose -f docker/docker-compose.yml down
 ```
-docker logs -f watchtower
+
+## 6. Build automático no GitHub Actions
+
+O workflow `.github/workflows/docker-image-build.yml` publica a imagem `markelpher/kookiechan:latest` no Docker Hub.
+
+Ele usa:
+
+- `docker/setup-qemu-action` para suporte multiarquitetura.
+- `docker/setup-buildx-action` para build com Buildx.
+- `docker/login-action` para autenticar no Docker Hub.
+- `docker/build-push-action` para gerar e publicar a imagem.
+
+As plataformas publicadas atualmente são:
+
+```text
+linux/amd64
+linux/arm64
 ```
+
+Secrets necessários no GitHub:
+
+```text
+DOCKER_USERNAME
+DOCKER_PASSWORD
+```
+
+## 7. Dicas de produção
+
+- Faça backup do volume `mongo_data`.
+- Use `docker compose -f docker/docker-compose.yml logs -f watchtower` para verificar atualizações automáticas.
+- Confira se o `.env` da VPS usa `MONGO_URI=mongodb://root:senha@mongo:27017/` quando o MongoDB for o serviço do Compose.
+- Troque a senha padrão do MongoDB antes de expor o serviço em produção.

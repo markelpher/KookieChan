@@ -44,15 +44,15 @@ pip install -r requirements.txt
 DISCORD_TOKEN=
 UPDATE_CHANNEL_ID=
 STATUS_CHANNEL_ID=
-KOOKIE_UPDATE_URL=https://kookie.app/announcements
-KOOKIE_STATUS_URL=https://kookie.app
-MONGO_URI=mongodb+srv://usuario:senha@cluster.mongodb.net/
+KOOKIE_UPDATE_URL=
+KOOKIE_STATUS_URL=
+MONGO_URI=
 MONGO_DB=
-MONGO_STATUS_COLLECTION=status
-MONGO_UPDATE_COLLECTION=updates
-MONGO_STATUS_LOGS_COLLECTION=status_logs
-MONGO_STATUS_ARCHIVE_COLLECTION=status_archive
-MONGO_UPDATE_ARCHIVE_COLLECTION=updates_archive
+MONGO_STATUS_COLLECTION=
+MONGO_UPDATE_COLLECTION=
+MONGO_STATUS_LOGS_COLLECTION=
+MONGO_STATUS_ARCHIVE_COLLECTION=
+MONGO_UPDATE_ARCHIVE_COLLECTION=
 ```
 
 > [!NOTE]
@@ -67,6 +67,39 @@ python main.py
 ```
 
 O bot iniciará e começará a monitorar o status e a página de Update do Kookie, enviando notificações automaticamente no servidor do Discord configurado.
+
+## Docker
+
+> [!NOTE]
+> O projeto inclui os arquivos `docker/dockerfile` e `docker/docker-compose.yml`.
+> O Docker Compose usa a imagem `markelpher/kookiechan:latest`, publicada no Docker Hub, e sobe também um serviço MongoDB local para o bot.
+
+Na raiz do projeto, execute:
+
+```
+docker compose -f docker/docker-compose.yml up -d
+```
+
+Para parar os containers:
+
+```
+docker compose -f docker/docker-compose.yml down
+```
+
+## Estrutura do projeto
+
+```
+KookieChan/
+├── cogs/             # Módulos e comandos do bot (Cogs)
+├── database/         # Camada de persistência e integrações com MongoDB
+├── docker/           # Arquivos Docker do projeto
+│   ├── dockerfile    # Imagem da Kookie Chan
+│   └── docker-compose.yml  # Bot, MongoDB e Watchtower
+├── docs/             # Documentação do projeto
+├── main.py           # Arquivo principal de inicialização
+├── utils.py          # Funções utilitárias
+└── requirements.txt  # Dependências Python
+```
 
 ## Como Funciona
 
@@ -118,4 +151,4 @@ Contribuições são bem-vindas. Para mais detalhes, veja a [Página de Contribu
 
 ## Licença
 
-Este projeto está licenciado sob a [GNU General Public License v3.0](https://github.com/markelpher/KookieChan/blob/main/docs/LICENSE).
+Este projeto está licenciado sob a [GNU General Public License v3.0](LICENSE).
