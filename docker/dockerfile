@@ -1,26 +1,26 @@
+FROM python:3.14-slim AS builder
+
+WORKDIR /build
+
+# Necessário apenas quando alguma dependência não oferece wheel para a plataforma.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN python -m pip install --no-cache-dir --prefix=/install -r requirements.txt
+
 FROM python:3.14-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    git \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN groupadd --system kookie && useradd --system --gid kookie --home-dir /app kookie
 
-COPY ../requirements.txt .
+COPY --from=builder /install /usr/local
+COPY src ./src
 
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+USER kookie:kookie
 
-COPY ../main.py .
-COPY ../utils.py .
-COPY ../cogs ./cogs
-COPY ../database ./database
-
-ARG FORCE_REBUILD
-
-CMD ["python", "main.py"]
+CMD ["python", "-m", "src"]

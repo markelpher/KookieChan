@@ -1,0 +1,7 @@
+# Ferramentas de desenvolvimento; inclui as dependências normais do projeto.
+-r requirements.in
+coverage
+pre-commit
+pip-audit
+pyright
+ruff

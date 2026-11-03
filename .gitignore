@@ -3,17 +3,18 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.Python
 .pytest_cache/
+.ruff_cache/
+.pyright/
 .mypy_cache/
+.hypothesis/
+.tox/
+.nox/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
-
-# Node
-node_modules/
-dist/
-build/
-npm-debug.log*
-yarn-error.log*
 
 # Ambientes virtuais
 .venv/
@@ -23,11 +24,15 @@ env/
 # Build Python
 *.egg-info/
 pip-wheel-metadata/
+share/python-wheels/
+build/
+dist/
 
 # Temp
 *.swp
 *.tmp
 *.temp
+*.log
 .DS_Store
 Thumbs.db
 

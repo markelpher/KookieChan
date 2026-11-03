@@ -1,43 +1,11 @@
 services:
   bot:
-    image: markelpher/kookiechan:latest
-    container_name: kookiechan
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - ../.env
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      - mongo
-    networks:
-      - botnet
-
-  mongo:
-    image: mongo:latest
-    container_name: mongodb
-    restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: senha
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-    networks:
-      - botnet
-
-  watchtower:
-    image: nickfedor/watchtower:latest
-    container_name: watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 60 bot
-    networks:
-      - botnet
-
-volumes:
-  mongo_data:
-
-networks:
-  botnet:

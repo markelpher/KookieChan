@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+    secrets:
+      DOKPLOY_API_KEY:
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Criar release no GitHub
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.verify.outputs.commit }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - name: Verificar tag e main
+        id: verify
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          ref="refs/tags/$TAG"
+          git check-ref-format "$ref"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main" "+${ref}:${ref}"
+          expected="$(git rev-parse --verify "${EXPECTED_SHA}^{commit}")"
+          actual="$(git rev-parse --verify "${ref}^{commit}")"
+          [ "$actual" = "$expected" ] || { echo 'A tag mudou após o CI.' >&2; exit 1; }
+          git merge-base --is-ancestor "$actual" refs/remotes/origin/main || {
+            echo 'A tag não aponta para um commit da main.' >&2; exit 1;
+          }
+          echo "commit=$actual" >> "$GITHUB_OUTPUT"
+
+      - name: Criar release se ainda não existir
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo 'Release existente preservada.'
+          else
+            python .github/scripts/release_notes.py "$TAG" > "$RUNNER_TEMP/release-notes.md"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$TAG" -f target_commitish="${{ steps.verify.outputs.commit }}" \
+              --jq .body > "$RUNNER_TEMP/generated-notes.md"
+            printf '\n## Pull requests e comparação\n\n' >> "$RUNNER_TEMP/release-notes.md"
+            cat "$RUNNER_TEMP/generated-notes.md" >> "$RUNNER_TEMP/release-notes.md"
+            release_title="Kookie Chan v${TAG#v}"
+            gh release create "$TAG" --verify-tag --notes-file "$RUNNER_TEMP/release-notes.md" --title "$release_title"
+          fi
+
+  dokploy:
+    name: Deploy opcional no Dokploy
+    needs: publish
+    if: needs.publish.result == 'success'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/dokploy.yml
+    secrets: inherit

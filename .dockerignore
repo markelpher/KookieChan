@@ -1,45 +1,61 @@
-# Documentação e CI/CD
-.git
-.gitignore
+# Controle de versão, CI e documentação
+.git/
 .github/
 docs/
+tests/
+database/
 *.md
 LICENSE
+.gitignore
+.dockerignore
 
-# Logs e caches Python
+# Configuração e dependências apenas de desenvolvimento
+.pre-commit-config.yaml
+pyproject.toml
+requirements.in
+requirements-dev.in
+requirements-dev.txt
+uv.lock
+docker/compose.yaml
+
+# Ambientes, caches e artefatos Python
+.venv/
+venv/
+env/
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 .pytest_cache/
+.ruff_cache/
+.pyright/
 .mypy_cache/
-
-# Node
-node_modules/
-
-# Ambientes virtuais
-.venv/
-venv/
-env/
-
-# Build e distribuição
-build/
-dist/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 *.egg-info/
 pip-wheel-metadata/
+build/
+dist/
 
-# Arquivos temporários
+# Logs e arquivos temporários
+*.log
 *.swp
 *.tmp
 *.temp
-.DS_Store
 .cache/
 
-# IDE's
+# IDE e sistema operacional
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
 
-# Variáveis sensíveis
+# Segredos e arquivos de ambiente
 .env
 .env.*
 *.pem
