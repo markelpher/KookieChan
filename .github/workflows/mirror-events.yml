@@ -1,0 +1,86 @@
+name: Synchronize mirror deletions and releases
+
+on:
+  delete:
+  release:
+    types: [published, edited, deleted]
+
+permissions:
+  contents: read
+
+jobs:
+  delete-ref:
+    name: Remover referência excluída nos mirrors
+    if: vars.MIRRORS_ENABLED != 'false' && github.event_name == 'delete' && (github.event.ref_type == 'branch' || github.event.ref_type == 'tag')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Exigir chaves de host verificadas
+        env:
+          KNOWN_HOSTS: ${{ secrets.MIRROR_SSH_KNOWN_HOSTS }}
+        run: test -n "$KNOWN_HOSTS"
+
+      - name: Instalar chave SSH
+        uses: shimataro/ssh-key-action@v2.8.1
+        with:
+          key: ${{ secrets.MIRROR_SSH_PRIVATE_KEY }}
+          known_hosts: ${{ secrets.MIRROR_SSH_KNOWN_HOSTS }}
+
+      - name: Conferir entradas dos dois servidores
+        run: |
+          ssh-keygen -F codeberg.org -f "$HOME/.ssh/known_hosts" >/dev/null
+          ssh-keygen -F gitlab.com -f "$HOME/.ssh/known_hosts" >/dev/null
+
+      - name: Replicar exclusão específica
+        env:
+          REF_NAME: ${{ github.event.ref }}
+          REF_TYPE: ${{ github.event.ref_type }}
+          GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" = branch ]; then
+            ref="refs/heads/$REF_NAME"
+            [ "$ref" != refs/heads/main ] || { echo 'A main não é removida automaticamente.' >&2; exit 1; }
+          else
+            ref="refs/tags/$REF_NAME"
+          fi
+          git check-ref-format "$ref"
+          MIRROR_ACTION=delete MIRROR_REF="$ref" python .github/scripts/mirror_refs.py
+
+  release-event:
+    name: Sincronizar publicação, edição ou exclusão de release
+    if: vars.MIRRORS_ENABLED != 'false' && github.event_name == 'release'
+    runs-on: ubuntu-latest
+    env:
+      GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+      GITLAB_ACCESS_TOKEN: ${{ secrets.GITLAB_ACCESS_TOKEN }}
+      GITLAB_API_URL: ${{ vars.GITLAB_API_URL }}
+      CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+      CODEBERG_API_URL: ${{ vars.CODEBERG_API_URL }}
+      MIRROR_CODEBERG_OWNER_REPO: ${{ vars.MIRROR_CODEBERG_OWNER_REPO || 'markelpher/kookiechan' }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_ACTION: ${{ github.event.action }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Sincronizar metadados
+        run: |
+          set -euo pipefail
+          test -n "$GITLAB_PROJECT_ID" && test -n "$GITLAB_ACCESS_TOKEN" && test -n "$CODEBERG_TOKEN"
+          if [ "$RELEASE_ACTION" != deleted ]; then
+            ref="refs/tags/$RELEASE_TAG"
+            git check-ref-format "$ref"
+            git fetch --no-tags origin "+${ref}:${ref}"
+            export GITHUB_TAG_SHA="$(git rev-parse --verify "${ref}^{commit}")"
+          fi
+          python .github/scripts/sync_releases.py

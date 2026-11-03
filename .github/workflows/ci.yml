@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Testes Python 3.14
+    if: github.event_name != 'push' || !github.event.deleted
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Configurar Python
+        uses: actions/setup-python@v7.1.0
+        with:
+          python-version: '3.14'
+          cache: pip
+
+      - name: Instalar dependências
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Verificar sintaxe
+        run: python -m compileall -q src tests
+
+      - name: Verificar lint com pre-commit/Ruff
+        run: pre-commit run --all-files
+
+      - name: Verificar tipos
+        run: pyright
+
+      - name: Verificar vulnerabilidades das dependências
+        run: pip-audit -r requirements.txt
+
+      - name: Executar testes
+        run: |
+          coverage run -m unittest discover -s tests -v
+          coverage report
+
+  docker:
+    name: Validar imagem Docker
+    if: github.event_name != 'push' || !github.event.deleted
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Validar configuração do Compose
+        run: |
+          cp .env.example .env
+          docker compose -f docker/compose.yaml config --quiet
+
+      - name: Compilar imagem localmente
+        run: docker build --file docker/Dockerfile --tag kookiechan:ci .
+
+      - name: Verificar imports e usuário
+        run: |
+          docker run --rm kookiechan:ci python -c \
+            "import os, src.main, src.cogs.config, src.cogs.help, src.cogs.history, src.cogs.ping, src.cogs.presence, src.cogs.status, src.cogs.update; assert os.getuid() != 0; print('Imports e usuário não root: OK!')"
+
+  mirror:
+    name: Sincronizar referências validadas
+    if: github.event_name == 'push' && !github.event.deleted && (github.ref_type == 'branch' || github.ref_type == 'tag')
+    needs: [test, docker]
+    uses: ./.github/workflows/mirrors.yml
+    with:
+      ref: ${{ github.ref }}
+      sha: ${{ github.sha }}
+    secrets: inherit
+
+  release:
+    name: Publicar release validada
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [test, docker, mirror]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ github.ref_name }}
+      sha: ${{ github.sha }}
+    secrets: inherit

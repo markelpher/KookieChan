@@ -1,0 +1,84 @@
+name: Dokploy
+
+on:
+  workflow_call:
+    secrets:
+      DOKPLOY_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Verificar disponibilidade do Dokploy
+    runs-on: ubuntu-latest
+    outputs:
+      online: ${{ steps.probe.outputs.online }}
+    steps:
+      - name: Conferir configuração e conexão
+        id: probe
+        env:
+          ENABLED: ${{ vars.DOKPLOY_ENABLED }}
+          DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+          COMPOSE_ID: ${{ vars.DOKPLOY_COMPOSE_ID }}
+          API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo 'online=false' >> "$GITHUB_OUTPUT"
+          if [ "$ENABLED" != 'true' ]; then
+            echo 'Dokploy desativado; deploy ignorado.'
+            exit 0
+          fi
+          if [ -z "$DOKPLOY_URL" ] || [ -z "$COMPOSE_ID" ] || [ -z "$API_KEY" ]; then
+            echo '::error::Dokploy ativado, mas URL, compose ID ou API key não configurados.'
+            exit 1
+          fi
+          case "$DOKPLOY_URL" in
+            https://*) ;;
+            *) echo '::error::DOKPLOY_URL deve usar HTTPS.'; exit 1 ;;
+          esac
+          if code="$(curl --silent --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 10 \
+            --header "x-api-key: $API_KEY" --header 'accept: application/json' "${DOKPLOY_URL%/}/api/project.all")"; then
+            case "$code" in
+              200) echo 'online=true' >> "$GITHUB_OUTPUT" ;;
+              5??) echo "Dokploy indisponível (HTTP $code); deploy ignorado." ;;
+              *) echo "::error::Dokploy respondeu HTTP $code; confira URL e permissões da API key."; exit 1 ;;
+            esac
+          else
+            result=$?
+            case "$result" in
+              6|7|28|52|55|56) echo 'Dokploy inacessível; deploy ignorado.' ;;
+              *) echo "::error::Falha ao verificar Dokploy (curl $result)."; exit 1 ;;
+            esac
+          fi
+
+  deploy:
+    name: Solicitar deploy no Dokploy
+    needs: check
+    if: needs.check.outputs.online == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Iniciar deploy do Compose
+        env:
+          DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+          COMPOSE_ID: ${{ vars.DOKPLOY_COMPOSE_ID }}
+          API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc --arg id "$COMPOSE_ID" '{composeId: $id}')"
+          if code="$(curl --silent --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time 20 \
+            --request POST --header "x-api-key: $API_KEY" --header 'content-type: application/json' \
+            --data "$payload" "${DOKPLOY_URL%/}/api/compose.deploy")"; then
+            case "$code" in
+              2??) echo 'Solicitação de deploy aceita pelo Dokploy.' ;;
+              5??) echo "::warning::Dokploy indisponível (HTTP $code); resultado do deploy é incerto." ;;
+              *) echo "::error::Dokploy recusou o deploy (HTTP $code)."; exit 1 ;;
+            esac
+          else
+            result=$?
+            case "$result" in
+              6|7|28|52|55|56) echo '::warning::Dokploy inacessível; resultado do deploy é incerto. Verifique antes de tentar novamente.' ;;
+              *) echo "::error::Falha ao solicitar deploy (curl $result)."; exit 1 ;;
+            esac
+          fi

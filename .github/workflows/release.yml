@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+    secrets:
+      GITLAB_PROJECT_ID:
+        required: false
+      GITLAB_ACCESS_TOKEN:
+        required: false
+      CODEBERG_TOKEN:
+        required: false
+      DOKPLOY_API_KEY:
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Criar release no GitHub
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.verify.outputs.commit }}
+      created: ${{ steps.create.outputs.created }}
+      fingerprint: ${{ steps.create.outputs.fingerprint }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - name: Verificar tag e main
+        id: verify
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          ref="refs/tags/$TAG"
+          git check-ref-format "$ref"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main" "+${ref}:${ref}"
+          expected="$(git rev-parse --verify "${EXPECTED_SHA}^{commit}")"
+          actual="$(git rev-parse --verify "${ref}^{commit}")"
+          [ "$actual" = "$expected" ] || { echo 'A tag mudou após o CI.' >&2; exit 1; }
+          git merge-base --is-ancestor "$actual" refs/remotes/origin/main || {
+            echo 'A tag não aponta para um commit da main.' >&2; exit 1;
+          }
+          echo "commit=$actual" >> "$GITHUB_OUTPUT"
+
+      - name: Criar release se ainda não existir
+        id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo 'Release existente preservada.'
+            echo 'created=false' >> "$GITHUB_OUTPUT"
+          else
+            python .github/scripts/release_notes.py "$TAG" > "$RUNNER_TEMP/release-notes.md"
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$TAG" -f target_commitish="${{ steps.verify.outputs.commit }}" \
+              --jq .body > "$RUNNER_TEMP/generated-notes.md"
+            printf '\n## Pull requests e comparação\n\n' >> "$RUNNER_TEMP/release-notes.md"
+            cat "$RUNNER_TEMP/generated-notes.md" >> "$RUNNER_TEMP/release-notes.md"
+            release_title="Kookie Chan v${TAG#v}"
+            gh release create "$TAG" --verify-tag --notes-file "$RUNNER_TEMP/release-notes.md" --title "$release_title"
+            echo 'created=true' >> "$GITHUB_OUTPUT"
+            api_url="$(gh release view "$TAG" --json apiUrl --jq .apiUrl)"
+            gh api "$api_url" | jq -cS '{id, tag_name, name, body, draft, prerelease, assets}' > "$RUNNER_TEMP/github-release.json"
+            echo "fingerprint=$(sha256sum "$RUNNER_TEMP/github-release.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          fi
+
+  sync-release:
+    name: Sincronizar release nos mirrors
+    if: vars.MIRRORS_ENABLED != 'false'
+    needs: publish
+    permissions:
+      contents: read
+    uses: ./.github/workflows/mirrors-sync.yml
+    with:
+      tag: ${{ inputs.tag }}
+      sha: ${{ needs.publish.outputs.commit }}
+    secrets: inherit
+
+  dokploy:
+    name: Deploy opcional no Dokploy
+    needs: [publish, sync-release]
+    if: ${{ always() && needs.publish.result == 'success' && (needs.sync-release.result == 'success' || (vars.MIRRORS_ENABLED == 'false' && needs.sync-release.result == 'skipped')) }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/dokploy.yml
+    secrets: inherit
+
+  rollback-github-release:
+    name: Reverter release criada nesta execução
+    if: ${{ always() && needs.publish.result == 'success' && needs.sync-release.result == 'failure' && needs.publish.outputs.created == 'true' }}
+    needs: [publish, sync-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Remover release somente se não foi alterada
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          EXPECTED: ${{ needs.publish.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          api_url="$(gh release view "$TAG" --json apiUrl --jq .apiUrl)"
+          gh api "$api_url" | jq -cS '{id, tag_name, name, body, draft, prerelease, assets}' > "$RUNNER_TEMP/github-release.json"
+          actual="$(sha256sum "$RUNNER_TEMP/github-release.json" | cut -d' ' -f1)"
+          [ "$actual" = "$EXPECTED" ] || { echo 'REVERSÃO INCOMPLETA: release alterada após criação; remoção cancelada.' >&2; exit 1; }
+          [ "$(jq '.assets | length' "$RUNNER_TEMP/github-release.json")" -eq 0 ] || {
+            echo 'REVERSÃO INCOMPLETA: release tem anexos; remoção cancelada.' >&2; exit 1;
+          }
+          id="$(jq -r .id "$RUNNER_TEMP/github-release.json")"
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          echo 'Release criada por esta execução removida; a tag foi preservada.'

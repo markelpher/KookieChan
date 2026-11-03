@@ -1,60 +1,33 @@
-name: Multi-Platform Sync Releases
+name: Sync Release to GitLab and Codeberg
 
 on:
-  release:
-    types:
-      - published
-      - edited
-      - deleted
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+    secrets:
+      GITLAB_PROJECT_ID:
+        required: true
+      GITLAB_ACCESS_TOKEN:
+        required: true
+      CODEBERG_TOKEN:
+        required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  preflight:
-    name: Verify release tag target
-    runs-on: ubuntu-latest
-    outputs:
-      tag_sha: ${{ steps.tag.outputs.tag_sha }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Resolve GitHub release tag SHA
-        id: tag
-        if: github.event.action != 'deleted'
-        run: |
-          git fetch origin "+refs/heads/main:refs/remotes/origin/main" "+refs/tags/${{ github.event.release.tag_name }}:refs/tags/${{ github.event.release.tag_name }}"
-          TAG_SHA="$(git rev-list -n 1 "${{ github.event.release.tag_name }}")"
-          MAIN_SHA="$(git rev-parse origin/main)"
-          echo "tag_sha=$TAG_SHA" >> "$GITHUB_OUTPUT"
-          if [ "$TAG_SHA" != "$MAIN_SHA" ]; then
-            gh release delete "${{ github.event.release.tag_name }}" --yes --cleanup-tag
-            echo "Release tag points to $TAG_SHA but latest main is $MAIN_SHA; deleted stale GitHub release/tag."
-            exit 1
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.MY_PERSONAL_TOKEN }}
-
-  git-mirror:
-    name: Sync Git refs first
-    needs: preflight
-    uses: ./.github/workflows/mirrors.yml
-    secrets: inherit
-
   sync-releases:
-    name: Sync release metadata
+    name: Sincronizar metadados da release
     runs-on: ubuntu-latest
-    needs:
-      - preflight
-      - git-mirror
     env:
-      GITHUB_TAG_SHA: ${{ needs.preflight.outputs.tag_sha }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      GITHUB_TAG_SHA: ${{ inputs.sha }}
       GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
       GITLAB_ACCESS_TOKEN: ${{ secrets.GITLAB_ACCESS_TOKEN }}
       GITLAB_API_URL: ${{ vars.GITLAB_API_URL }}
@@ -62,15 +35,15 @@ jobs:
       CODEBERG_API_URL: ${{ vars.CODEBERG_API_URL }}
       MIRROR_CODEBERG_OWNER_REPO: ${{ vars.MIRROR_CODEBERG_OWNER_REPO || 'markelpher/kookiechan' }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
         with:
-          fetch-depth: 0
+          ref: ${{ inputs.sha }}
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-
-      - name: Sync GitHub release to GitLab and Codeberg
-        run: python .github/scripts/sync_releases.py
+      - name: Consultar release e sincronizar mirrors
+        run: |
+          set -euo pipefail
+          test -n "$GITLAB_PROJECT_ID" && test -n "$GITLAB_ACCESS_TOKEN" && test -n "$CODEBERG_TOKEN"
+          gh release view "$TAG" --json tagName,name,body,isPrerelease,isDraft,url > "$RUNNER_TEMP/release.json"
+          python -c 'import json, os; p=os.environ["RUNNER_TEMP"]; r=json.load(open(p+"/release.json", encoding="utf-8")); event={"action":"published","release":{"tag_name":r["tagName"],"name":r["name"],"body":r["body"],"prerelease":r["isPrerelease"],"draft":r["isDraft"],"html_url":r["url"]}}; json.dump(event,open(p+"/release-event.json","w",encoding="utf-8"))'
+          GITHUB_EVENT_PATH="$RUNNER_TEMP/release-event.json" python .github/scripts/sync_releases.py

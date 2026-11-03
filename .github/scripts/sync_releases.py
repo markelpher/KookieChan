@@ -5,7 +5,7 @@ import os
 import sys
 from dataclasses import dataclass
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -43,13 +43,14 @@ def request_json(
         with urlopen(request, timeout=30) as response:
             raw = response.read()
             if response.status not in ok_statuses:
-                raise RuntimeError(f"{method} {url} returned {response.status}: {raw!r}")
+                raise RuntimeError(f"{method} API returned HTTP {response.status}")
             return json.loads(raw.decode("utf-8")) if raw else None
     except HTTPError as error:
-        raw = error.read().decode("utf-8", errors="replace")
         if error.code not in ok_statuses:
-            raise RuntimeError(f"{method} {url} returned {error.code}: {raw}") from error
+            raise RuntimeError(f"{method} API returned HTTP {error.code}") from None
         return None
+    except (URLError, TimeoutError):
+        raise RuntimeError(f"{method} API connection failed") from None
 
 
 def load_release() -> tuple[str, Release]:
@@ -123,9 +124,7 @@ def sync_gitlab(action: str, release: Release) -> None:
     if existing:
         commit_id = ((existing.get("commit") or {}).get("id") or "").lower()
         if commit_id and commit_id != github_tag_sha(release.tag).lower():
-            request_json("DELETE", f"{base_url}/{tag}", headers, ok_statuses=(200, 202, 204, 404))
-            existing = None
-            print(f"Deleted stale GitLab release {release.tag}: {commit_id} != {github_tag_sha(release.tag)}")
+            raise RuntimeError(f"GitLab release {release.tag!r} aponta para outro commit; nenhuma release foi apagada")
 
     if existing:
         request_json(
@@ -182,17 +181,7 @@ def sync_codeberg(action: str, release: Release) -> None:
     target_sha = codeberg_tag_sha(api_url, owner, repo, headers, release.tag)
     github_sha = github_tag_sha(release.tag)
     if target_sha.lower() != github_sha.lower():
-        if existing:
-            delete_codeberg_release(base_url, headers, existing)
-            print(f"Deleted stale Codeberg release {release.tag}: {target_sha} != {github_sha}")
         raise RuntimeError(f"Codeberg tag {release.tag!r} is not mirrored to the latest GitHub SHA yet")
-
-    if existing:
-        existing_target = str(existing.get("target_commitish") or "").lower()
-        if existing_target and existing_target != target_sha.lower():
-            delete_codeberg_release(base_url, headers, existing)
-            existing = None
-            print(f"Deleted stale Codeberg release {release.tag}: {existing_target} != {target_sha}")
 
     payload = {
         "tag_name": release.tag,
@@ -218,10 +207,130 @@ def delete_codeberg_release(base_url: str, headers: dict[str, str], release: dic
     request_json("DELETE", f"{base_url}/{release_id}", headers, ok_statuses=(200, 202, 204, 404))
 
 
+class ReleaseMirror:
+    """Snapshot e compensação conservadora de metadados de uma release."""
+    def __init__(self, kind: str, release: Release):
+        self.kind = kind
+        self.release = release
+        if kind == 'gitlab':
+            token, project = env('GITLAB_ACCESS_TOKEN') or env('GITLAB_TOKEN'), env('GITLAB_PROJECT_ID')
+            if not token or not project:
+                raise RuntimeError('GitLab: token ou projeto não configurado')
+            api = env('GITLAB_API_URL', 'https://gitlab.com/api/v4').rstrip('/')
+            self.base = f'{api}/projects/{quote(project, safe="")}/releases'
+            self.url = f'{self.base}/{quote(release.tag, safe="")}'
+            self.headers = {'PRIVATE-TOKEN': token}
+        else:
+            token, owner_repo = env('CODEBERG_TOKEN'), codeberg_owner_repo()
+            if not token or not owner_repo:
+                raise RuntimeError('Codeberg: token ou repositório não configurado')
+            owner, repo = owner_repo
+            api = env('CODEBERG_API_URL', 'https://codeberg.org/api/v1').rstrip('/')
+            self.api, self.owner, self.repo = api, owner, repo
+            self.base = f'{api}/repos/{owner}/{repo}/releases'
+            self.url = f'{self.base}/tags/{quote(release.tag, safe="")}'
+            self.headers = {'Authorization': f'token {token}'}
+
+    def snapshot(self):
+        return request_json('GET', self.url, self.headers, ok_statuses=(200, 404))
+
+    def signature(self, item):
+        if item is None:
+            return None
+        if self.kind == 'gitlab':
+            return (item.get('name'), item.get('description'), item.get('released_at'),
+                    (item.get('commit') or {}).get('id'), item.get('assets'), item.get('milestones'))
+        return (item.get('id'), item.get('name'), item.get('body'), item.get('draft'),
+                item.get('prerelease'), item.get('target_commitish'), item.get('assets'))
+
+    def has_assets(self, item):
+        if not item:
+            return False
+        if self.kind == 'gitlab':
+            return bool((item.get('assets') or {}).get('links'))
+        return bool(item.get('assets'))
+
+    def rollback(self, before, after):
+        current = self.snapshot()
+        if self.signature(current) != self.signature(after):
+            raise RuntimeError(f'{self.kind}: release alterada após sincronização; reversão cancelada')
+        if before is None and after is not None:
+            if self.has_assets(current):
+                raise RuntimeError(f'{self.kind}: release recebeu anexos; exclusão cancelada')
+            url = self.url if self.kind == 'gitlab' else f'{self.base}/{current["id"]}'
+            request_json('DELETE', url, self.headers, ok_statuses=(200, 202, 204))
+        elif before is not None and after is None:
+            if self.has_assets(before):
+                raise RuntimeError(f'{self.kind}: não é possível restaurar anexos automaticamente')
+            if self.kind == 'gitlab':
+                tag_url = f'{self.base[:-len("/releases")]}/repository/tags/{quote(self.release.tag, safe="")}'
+                tag = request_json('GET', tag_url, self.headers, ok_statuses=(200, 404))
+                expected_commit = (before.get('commit') or {}).get('id')
+                if not tag or (expected_commit and (tag.get('commit') or {}).get('id') != expected_commit):
+                    raise RuntimeError('GitLab: tag ausente ou alterada; recriação da release cancelada')
+                payload = {'tag_name': self.release.tag, 'name': before.get('name'),
+                           'description': before.get('description'), 'released_at': before.get('released_at'),
+                           'ref': (before.get('commit') or {}).get('id')}
+                milestones = [m['title'] for m in before.get('milestones') or [] if m.get('title')]
+                if milestones:
+                    payload['milestones'] = milestones
+            else:
+                tag_sha = codeberg_tag_sha(self.api, self.owner, self.repo, self.headers, self.release.tag)
+                expected = str(before.get('target_commitish') or '')
+                if len(expected) == 40 and all(c in '0123456789abcdefABCDEF' for c in expected) and expected.lower() != tag_sha.lower():
+                    raise RuntimeError('Codeberg: tag alterada; recriação da release cancelada')
+                payload = {key: before.get(key) for key in ('tag_name', 'target_commitish', 'name', 'body', 'draft', 'prerelease')}
+            request_json('POST', self.base, self.headers, payload)
+        elif before is not None and after is not None:
+            if self.kind == 'gitlab':
+                request_json('PUT', self.url, self.headers,
+                             {'name': before.get('name'), 'description': before.get('description')})
+            else:
+                payload = {key: before.get(key) for key in ('tag_name', 'target_commitish', 'name', 'body', 'draft', 'prerelease')}
+                request_json('PATCH', f'{self.base}/{current["id"]}', self.headers, payload)
+        print(f'{self.kind}: metadados anteriores restaurados')
+
+
+def sync_transaction(action: str, release: Release):
+    mirrors = [ReleaseMirror('gitlab', release), ReleaseMirror('codeberg', release)]
+    snapshots = [(mirror, mirror.snapshot()) for mirror in mirrors]
+    if action == 'deleted':
+        for mirror, before in snapshots:
+            if mirror.has_assets(before):
+                raise RuntimeError(f'{mirror.kind}: exclusão bloqueada; anexos não podem ser restaurados automaticamente')
+    completed = []
+    current_step = None
+    try:
+        for mirror, before in snapshots:
+            current_step = (mirror, before)
+            if mirror.signature(mirror.snapshot()) != mirror.signature(before):
+                raise RuntimeError(f'{mirror.kind}: release mudou durante a preparação')
+            (sync_gitlab if mirror.kind == 'gitlab' else sync_codeberg)(action, release)
+            after = mirror.snapshot()
+            completed.append((mirror, before, after))
+            current_step = None
+    except Exception as error:
+        failures = []
+        if current_step:
+            mirror, before = current_step
+            try:
+                if mirror.signature(mirror.snapshot()) != mirror.signature(before):
+                    failures.append(f'{mirror.kind}: estado da etapa com erro é incerto; revise manualmente')
+            except Exception as exc:
+                failures.append(f'{mirror.kind}: não foi possível confirmar o estado: {exc}')
+        for mirror, before, after in reversed(completed):
+            try:
+                mirror.rollback(before, after)
+            except Exception as exc:
+                failures.append(str(exc))
+        if failures:
+            raise RuntimeError(f'{error}; REVERSÃO INCOMPLETA: ' + '; '.join(failures)) from error
+        raise RuntimeError(f'{error}; alterações anteriores revertidas') from error
+
+
 def main() -> int:
     action, release = load_release()
-    sync_gitlab(action, release)
-    sync_codeberg(action, release)
+    sync_transaction(action, release)
     return 0
 
 

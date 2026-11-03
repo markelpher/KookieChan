@@ -1,48 +1,93 @@
 name: Mirror to Codeberg and GitLab
 
 on:
-  push:
-    branches:
-      - "**"
   workflow_call:
-  workflow_dispatch:
+    inputs:
+      ref:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+    secrets:
+      MIRROR_SSH_PRIVATE_KEY:
+        required: false
+      MIRROR_SSH_KNOWN_HOSTS:
+        required: false
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+permissions:
+  contents: read
 
 jobs:
   git-mirror:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - name: Mirrors desativados
+        if: vars.MIRRORS_ENABLED == 'false'
+        run: echo 'Sincronização de mirrors desativada.'
+      - name: Checkout
+        if: vars.MIRRORS_ENABLED != 'false'
+        uses: actions/checkout@v7.0.1
         with:
+          ref: ${{ inputs.sha }}
           fetch-depth: 0
 
-      - name: Refresh GitHub refs
-        run: git fetch origin "+refs/heads/*:refs/mirror/heads/*" "+refs/tags/*:refs/tags/*" --prune --prune-tags
+      - name: Validar referência testada
+        if: vars.MIRRORS_ENABLED != 'false'
+        id: validate
+        env:
+          SOURCE_REF: ${{ inputs.ref }}
+          EXPECTED_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          case "$SOURCE_REF" in
+            refs/heads/*|refs/tags/*) ;;
+            *) echo "Referência não permitida: $SOURCE_REF" >&2; exit 1 ;;
+          esac
+          git check-ref-format "$SOURCE_REF"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main" "+${SOURCE_REF}:${SOURCE_REF}"
+          expected="$(git rev-parse --verify "${EXPECTED_SHA}^{commit}")"
+          current="$(git rev-parse --verify "${SOURCE_REF}^{commit}")"
+          [ "$current" = "$expected" ] || { echo 'A referência mudou após o CI.' >&2; exit 1; }
+          if [[ "$SOURCE_REF" == refs/tags/* ]]; then
+            git merge-base --is-ancestor "$expected" refs/remotes/origin/main || {
+              echo 'A tag não aponta para um commit da main.' >&2; exit 1;
+            }
+            echo "source=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "source=$expected" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Configurar Node.js
+        if: vars.MIRRORS_ENABLED != 'false'
+        uses: actions/setup-node@v7.1.0
         with:
-          node-version: "24"
+          node-version: '24'
 
-      - name: Install SSH Key
-        uses: shimataro/ssh-key-action@v2
+      - name: Exigir chaves de host verificadas
+        if: vars.MIRRORS_ENABLED != 'false'
+        env:
+          KNOWN_HOSTS: ${{ secrets.MIRROR_SSH_KNOWN_HOSTS }}
+        run: test -n "$KNOWN_HOSTS"
+
+      - name: Instalar chave SSH
+        if: vars.MIRRORS_ENABLED != 'false'
+        uses: shimataro/ssh-key-action@v2.8.1
         with:
           key: ${{ secrets.MIRROR_SSH_PRIVATE_KEY }}
-          known_hosts: 'placeholder'
+          known_hosts: ${{ secrets.MIRROR_SSH_KNOWN_HOSTS }}
 
-      - name: Adding Known Hosts
+      - name: Conferir entradas dos dois servidores
+        if: vars.MIRRORS_ENABLED != 'false'
         run: |
-          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
-          ssh-keyscan gitlab.com >> ~/.ssh/known_hosts
+          ssh-keygen -F codeberg.org -f "$HOME/.ssh/known_hosts" >/dev/null
+          ssh-keygen -F gitlab.com -f "$HOME/.ssh/known_hosts" >/dev/null
 
-      - name: Mirror to Codeberg
-        run: |
-          git remote add codeberg git@codeberg.org:markelpher/KookieChan.git || true
-          git push --force --prune codeberg "refs/mirror/heads/*:refs/heads/*" "refs/tags/*:refs/tags/*"
-
-      - name: Mirror to GitLab
-        run: |
-          git remote add gitlab git@gitlab.com:markelpher/kookiechan.git || true
-          git push --force --prune gitlab "refs/mirror/heads/*:refs/heads/*" "refs/tags/*:refs/tags/*"
+      - name: Sincronizar referência no Codeberg e no GitLab
+        if: vars.MIRRORS_ENABLED != 'false'
+        env:
+          MIRROR_ACTION: sync
+          MIRROR_SOURCE: ${{ steps.validate.outputs.source }}
+          MIRROR_REF: ${{ inputs.ref }}
+          GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null
+        run: python .github/scripts/mirror_refs.py
