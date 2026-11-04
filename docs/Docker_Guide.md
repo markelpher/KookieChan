@@ -1,6 +1,6 @@
 # Guia de execução com Docker
 
-O Docker Compose compila a imagem a partir do código local e executa o bot. O banco permanece no Supabase; o Compose não cria um banco de dados local.
+O Docker Compose compila a imagem a partir do código local e executa o bot. O banco permanece no Supabase, e o Compose não cria um banco de dados local.
 
 A imagem suporta `amd64` e `arm64` (ARM de 64 bits). Em uma máquina ARM64, o Compose seleciona a arquitetura nativa automaticamente. Para compilar imagens específicas com Buildx, na raiz do repositório:
 
@@ -17,7 +17,7 @@ Para compilar as duas arquiteturas em um único comando e publicar uma tag multi
 docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile --tag USUARIO/kookiechan:latest --push .
 ```
 
-Substitua `USUARIO/kookiechan` pelo nome da imagem no registry. O `--push` publica o índice multi-plataforma; o `--load` não carrega builds com várias plataformas no Docker local.
+Substitua `USUARIO/kookiechan` pelo nome da imagem no registry. O `--push` publica o índice multi-plataforma. Já o `--load` não carrega builds com várias plataformas no Docker local.
 
 Para compilar as duas sem publicar no registry, exporte o resultado como um arquivo OCI local:
 
@@ -25,7 +25,7 @@ Para compilar as duas sem publicar no registry, exporte o resultado como um arqu
 docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile --tag kookiechan:latest --output type=oci,dest=kookiechan-multiarch.tar .
 ```
 
-Isso cria `kookiechan-multiarch.tar` na pasta atual; não envia a imagem ao Docker Hub nem a carrega automaticamente no armazenamento local do Docker.
+Isso cria `kookiechan-multiarch.tar` na pasta atual, mas não envia a imagem ao Docker Hub nem a carrega automaticamente no armazenamento local do Docker.
 
 A imagem usa uma etapa separada para instalar dependências e executa o bot como usuário sem privilégios de root. O Compose usa um processo `init` e impede a elevação de privilégios. Nenhuma porta precisa ser publicada: o bot inicia conexões de saída.
 
@@ -39,7 +39,7 @@ A imagem usa uma etapa separada para instalar dependências e executa o bot como
 No SQL Editor de um **projeto Supabase novo**, execute [`database/sqls/schema.sql`](../database/sqls/schema.sql). Esse arquivo cria as tabelas, ativa RLS, configura as permissões e instala a função usada para registrar verificações. Em uma instalação existente, pare o bot, faça backup e execute novamente o esquema para aplicar as atualizações idempotentes, inclusive as colunas da fila de anúncios e da persistência do ajuste manual de tempo. Consulte o [README](../README.md) para as variáveis necessárias.
 
 > [!WARNING]
-> `SUPABASE_SECRET_KEY` e `DISCORD_TOKEN` são credenciais de servidor. Não publique o `.env`, imagens de tela contendo os valores ou logs que os exponham. A secret key ignora RLS; não a use em aplicativos cliente. Caso uma credencial seja exposta, revogue-a e gere outra.
+> `SUPABASE_SECRET_KEY` e `DISCORD_TOKEN` são credenciais de servidor. Não publique o `.env`, imagens de tela contendo os valores ou logs que os exponham. A secret key ignora RLS, então não a use em aplicativos cliente. Caso uma credencial seja exposta, revogue-a e gere outra.
 
 ## Iniciar e acompanhar
 
@@ -50,7 +50,7 @@ docker compose -f docker/docker-compose.yml up -d --build
 docker compose -f docker/docker-compose.yml logs -f bot
 ```
 
-O Compose lê `../.env` em relação a `docker/docker-compose.yml`. O bot precisa de acesso de rede ao Discord, à API do Supabase e às URLs monitoradas. Após iniciar, use `/configurações` para definir canais, URLs e notificações, e para ativar ou pausar os serviços automáticos; esses valores são persistidos no Supabase.
+O Compose lê `../.env` em relação a `docker/docker-compose.yml`. O bot precisa de acesso de rede ao Discord, à API do Supabase e às URLs monitoradas. Após iniciar, use `/configurações` para definir canais, URLs e notificações, além de ativar ou pausar os serviços automáticos. Esses valores são persistidos no Supabase.
 
 ## Atualizar ou parar
 
