@@ -1,6 +1,6 @@
 # 👻🍪 Kookie Chan
 
-Kookie Chan é um bot em Python desenvolvido para o [servidor](https://discord.gg/TWcCnmxcPN) da rede social brasileira [Kookie](https://kookie.app), mantido pela comunidade.
+Kookie Chan é um bot em Python desenvolvido para o [servidor](https://discord.gg/TWcCnmxcPN) da rede social brasileira [Kookie](https://kookie.app).
 
 Ele acompanha a disponibilidade da plataforma e procura novidades na página de anúncios, informando os usuários no Discord sobre atualizações e mudanças de status.
 
