@@ -91,7 +91,7 @@ jobs:
             "import os, src.main, src.cogs.config, src.cogs.help, src.cogs.history, src.cogs.ping, src.cogs.presence, src.cogs.status, src.cogs.update; assert os.getuid() != 0; print('Imports ARM64 e usuário não root: OK!')"
 
   release:
-    name: Publicar release validada
+    name: Publicar release
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [test, docker]
     permissions:
