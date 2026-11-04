@@ -58,6 +58,9 @@ class ComponentsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(components[0]["component"]["default_values"][0]["id"], 123)
         self.assertTrue(components[2]["component"]["options"][0]["default"])
         self.assertTrue(components[3]["component"]["options"][1]["default"])
+        self.assertFalse(modal.status_ping_select.required)
+        self.assertFalse(modal.update_ping_select.required)
+        self.assertEqual(modal.status_ping_select.min_values, 0)
 
     async def test_other_settings_use_compact_modals(self):
         channels = ChannelSettingsModal(

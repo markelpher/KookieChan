@@ -30,10 +30,12 @@ def select_default_values(value, value_type):
     return [discord.SelectDefaultValue(id=int(value), type=value_type)]
 
 
-def toggle_select(label, enabled):
+def toggle_select(label, enabled, *, required=True):
     # Cria um seletor reutilizável de ativação ou desativação.
     return discord.ui.Select(
         placeholder=label,
+        min_values=1 if required else 0,
+        required=required,
         options=[
             discord.SelectOption(label="Ativado", value="true", default=enabled),
             discord.SelectOption(
@@ -365,20 +367,24 @@ class NotificationSettingsModal(AdminModal, title="Configurar notificações"):
                 update_role_id, discord.SelectDefaultValueType.role
             ),
         )
-        self.status_ping_select = toggle_select("Ping de Status", status_ping_enabled)
-        self.update_ping_select = toggle_select("Ping de Anúncios", update_ping_enabled)
+        self.status_ping_select = toggle_select(
+            "Ping de Status", status_ping_enabled, required=False
+        )
+        self.update_ping_select = toggle_select(
+            "Ping de Anúncios", update_ping_enabled, required=False
+        )
 
         self.add_item(
             discord.ui.Label(
                 text="Cargo de Status",
-                description="Opcional; limpe para remover o cargo.",
+                description="Cargo mencionado quando o status mudar.",
                 component=self.status_role_select,
             )
         )
         self.add_item(
             discord.ui.Label(
                 text="Cargo de Anúncios",
-                description="Opcional; limpe para remover o cargo.",
+                description="Cargo mencionado quando houver um novo anúncio.",
                 component=self.update_role_select,
             )
         )
@@ -393,10 +399,12 @@ class NotificationSettingsModal(AdminModal, title="Configurar notificações"):
         status_role = self.status_role_select.values
         update_role = self.update_role_select.values
         values = {
-            "status_role_id": status_role[0].id if status_role else None,
-            "update_role_id": update_role[0].id if update_role else None,
-            "status_ping_enabled": self.status_ping_select.values[0] == "true",
-            "update_ping_enabled": self.update_ping_select.values[0] == "true",
+            "status_role_id": status_role[0].id if status_role else "",
+            "update_role_id": update_role[0].id if update_role else "",
+            "status_ping_enabled": bool(self.status_ping_select.values)
+            and self.status_ping_select.values[0] == "true",
+            "update_ping_enabled": bool(self.update_ping_select.values)
+            and self.update_ping_select.values[0] == "true",
         }
         await save_modal_settings(
             interaction,

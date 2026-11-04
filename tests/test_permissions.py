@@ -205,7 +205,7 @@ class AdminPermissionsTest(unittest.IsolatedAsyncioTestCase):
         db.set_configs.assert_awaited_once_with(
             {
                 "status_role_id": 123,
-                "update_role_id": None,
+                "update_role_id": "",
                 "status_ping_enabled": True,
                 "update_ping_enabled": False,
             }
@@ -213,6 +213,30 @@ class AdminPermissionsTest(unittest.IsolatedAsyncioTestCase):
         interaction.response.edit_message.assert_awaited_once()
         self.assertIsInstance(
             interaction.response.edit_message.await_args.kwargs["view"], DashboardView
+        )
+
+    async def test_notification_modal_saves_when_everything_is_empty(self):
+        db = SimpleNamespace(
+            get_config=AsyncMock(return_value=None),
+            set_configs=AsyncMock(),
+        )
+        modal = NotificationSettingsModal(db)
+        modal.status_ping_select._values = []
+        modal.update_ping_select._values = []
+        interaction = SimpleNamespace(
+            client=SimpleNamespace(),
+            response=SimpleNamespace(edit_message=AsyncMock(), is_done=lambda: True),
+        )
+
+        await cast(Any, modal.on_submit)(interaction)
+
+        db.set_configs.assert_awaited_once_with(
+            {
+                "status_role_id": "",
+                "update_role_id": "",
+                "status_ping_enabled": False,
+                "update_ping_enabled": False,
+            }
         )
 
     async def test_saving_urls_returns_to_the_existing_configuration_menu(self):
