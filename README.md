@@ -116,7 +116,7 @@ Para atualizar uma instalação existente, pare o bot, faça backup e execute no
 
 ## Docker
 
-O Compose compila a imagem localmente e executa o bot; o banco de dados permanece no Supabase. Configure `.env` antes de iniciar:
+O Compose compila a imagem para a arquitetura da máquina e executa o bot; o banco de dados permanece no Supabase. São suportadas máquinas x86-64 (`amd64`) e ARM de 64 bits (`arm64`, como Raspberry Pi com sistema de 64 bits). Configure `.env` antes de iniciar:
 
 ```sh
 docker compose -f docker/docker-compose.yml up -d --build
@@ -159,7 +159,7 @@ Para executar os testes localmente:
 python -m unittest discover -s tests -v
 ```
 
-O CI também valida o Compose, compila a imagem Docker localmente e verifica os imports e o usuário do container. Ele não publica a imagem e não precisa de credenciais do Docker Hub.
+O CI valida o Compose, compila e verifica a imagem Docker para `amd64` e `arm64`, incluindo imports e execução sem root. Ele não publica a imagem e não precisa de credenciais do Docker Hub.
 
 Commits enviados a qualquer branch passam pelo CI. Pull requests executam apenas o CI. Ao enviar uma tag cujo commit pertence ao histórico da `main`, o fluxo cria uma release no GitHub após a validação, com título no formato `Kookie Chan vX.Y.Z` (por exemplo, a tag `1.2.3` ou `v1.2.3` gera `Kookie Chan v1.2.3`). Tags não são criadas automaticamente; uma release já existente é preservada.
 

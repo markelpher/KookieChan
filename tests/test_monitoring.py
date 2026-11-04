@@ -44,24 +44,30 @@ class MonitoringTest(unittest.TestCase):
         self.assertEqual(s.get("total_online", 0), 0)
 
     def test_manual_start_survives_gap_while_same_status_continues(self):
-        s = cast(StatusState, {
-            "online": False,
-            "last_check_ts": 100,
-            "last_status_change": 0,
-            "manual_status_start": True,
-        })
+        s = cast(
+            StatusState,
+            {
+                "online": False,
+                "last_check_ts": 100,
+                "last_status_change": 0,
+                "manual_status_start": True,
+            },
+        )
         apply_check(s, False, 1000)
         self.assertEqual(s["last_status_change"], 0)
         self.assertEqual(s["continuous_offline"], 1000)
         self.assertTrue(s["manual_status_start"])
 
     def test_manual_start_is_cleared_on_status_transition(self):
-        s = cast(StatusState, {
-            "online": False,
-            "last_check_ts": 100,
-            "last_status_change": 0,
-            "manual_status_start": True,
-        })
+        s = cast(
+            StatusState,
+            {
+                "online": False,
+                "last_check_ts": 100,
+                "last_status_change": 0,
+                "manual_status_start": True,
+            },
+        )
         apply_check(s, True, 1000)
         self.assertFalse(s["manual_status_start"])
         self.assertEqual(s["last_status_change"], 1000)

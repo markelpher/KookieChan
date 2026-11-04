@@ -2,6 +2,31 @@
 
 O Docker Compose compila a imagem a partir do código local e executa o bot. O banco permanece no Supabase; o Compose não cria um banco de dados local.
 
+A imagem suporta `amd64` e `arm64` (ARM de 64 bits). Em uma máquina ARM64, o Compose seleciona a arquitetura nativa automaticamente. Para compilar imagens específicas com Buildx, na raiz do repositório:
+
+```sh
+docker buildx build --platform linux/amd64 --load --file docker/Dockerfile --tag kookiechan:amd64 .
+docker buildx build --platform linux/arm64 --load --file docker/Dockerfile --tag kookiechan:arm64 .
+```
+
+O build ARM64 em uma máquina de outra arquitetura requer emulação Buildx habilitada. ARM de 32 bits não é suportado pela imagem-base Python utilizada.
+
+Para compilar as duas arquiteturas em um único comando e publicar uma tag multi-plataforma em um registry, autentique-se nele com `docker login` e use:
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile --tag USUARIO/kookiechan:latest --push .
+```
+
+Substitua `USUARIO/kookiechan` pelo nome da imagem no registry. O `--push` publica o índice multi-plataforma; o `--load` não carrega builds com várias plataformas no Docker local.
+
+Para compilar as duas sem publicar no registry, exporte o resultado como um arquivo OCI local:
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile --tag kookiechan:latest --output type=oci,dest=kookiechan-multiarch.tar .
+```
+
+Isso cria `kookiechan-multiarch.tar` na pasta atual; não envia a imagem ao Docker Hub nem a carrega automaticamente no armazenamento local do Docker.
+
 A imagem usa uma etapa separada para instalar dependências e executa o bot como usuário sem privilégios de root. O Compose usa um processo `init` e impede a elevação de privilégios. Nenhuma porta precisa ser publicada: o bot inicia conexões de saída.
 
 ## Pré-requisitos

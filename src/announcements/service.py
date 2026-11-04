@@ -24,9 +24,7 @@ class AnnouncementService:
                 "description": update["description"],
                 "date": update["date"].isoformat(),
             }
-            inserted += bool(
-                await self.repository.insert_update(record)
-            )
+            inserted += bool(await self.repository.insert_update(record))
         return inserted
 
     async def discover_best_effort(self, url: str | None) -> int:

@@ -7,8 +7,8 @@ from discord import Interaction, app_commands
 from discord.ext import commands
 from discord.ui import Button
 
-from src.core.utils import announcement_date, discord_timestamp
 from src.announcements.types import DisplayAnnouncement
+from src.core.utils import announcement_date, discord_timestamp
 from src.database.announcement_repository import AnnouncementRepository
 from src.database.database import get_database
 from src.monitoring.types import StatusLogRecord
@@ -76,8 +76,10 @@ class HistoryCog(commands.Cog):
 
     def build_update_content(self, update: DisplayAnnouncement) -> PanelContent:
         date = update["date"]
-        dt = date if isinstance(date, datetime) else datetime.fromisoformat(
-            date.replace("Z", "+00:00")
+        dt = (
+            date
+            if isinstance(date, datetime)
+            else datetime.fromisoformat(date.replace("Z", "+00:00"))
         )
         return PanelContent(
             title=f"📢 {update['title']}",

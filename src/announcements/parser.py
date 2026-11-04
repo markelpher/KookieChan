@@ -5,9 +5,9 @@ import logging
 import aiohttp
 from bs4 import BeautifulSoup
 
+from src.announcements.types import ParsedAnnouncement
 from src.core.http import ensure_public_ip_literal, get_http_session
 from src.core.utils import now, parse_brazilian_date
-from src.announcements.types import ParsedAnnouncement
 
 logger = logging.getLogger(__name__)
 

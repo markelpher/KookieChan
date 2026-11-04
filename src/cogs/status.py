@@ -79,9 +79,7 @@ class StatusCog(commands.Cog):
         self.state["config"] = {
             "kookie_status_url": await get_config(self.db, "kookie_status_url"),
             "status_old_messages_cleanup_enabled": bool(
-                await get_config(
-                    self.db, "status_old_messages_cleanup_enabled", False
-                )
+                await get_config(self.db, "status_old_messages_cleanup_enabled", False)
             ),
         }
         if not self.state["config"]["status_old_messages_cleanup_enabled"]:

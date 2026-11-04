@@ -9,9 +9,8 @@ import discord
 
 from src.announcements.delivery import has_delivery_marker, marker
 from src.announcements.types import (
-    AnnouncementRecord,
-    DisplayAnnouncement,
     DeliveryAnnouncement,
+    DisplayAnnouncement,
     PendingAnnouncement,
 )
 from src.core.background import supervise_task

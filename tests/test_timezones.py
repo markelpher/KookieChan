@@ -42,16 +42,19 @@ class TimezoneTest(unittest.IsolatedAsyncioTestCase):
 
     def test_status_and_history_display(self):
         status = object.__new__(StatusCog)
-        state = cast(StatusState, {
-            "online": True,
-            "last_http_code": 200,
-            "last_response_time": 1,
-            "last_check": datetime(2026, 5, 1, 2, tzinfo=timezone.utc),
-            "continuous_online": 0,
-            "downtimes_count": 0,
-            "total_online": 0,
-            "total_offline": 0,
-        })
+        state = cast(
+            StatusState,
+            {
+                "online": True,
+                "last_http_code": 200,
+                "last_response_time": 1,
+                "last_check": datetime(2026, 5, 1, 2, tzinfo=timezone.utc),
+                "continuous_online": 0,
+                "downtimes_count": 0,
+                "total_online": 0,
+                "total_offline": 0,
+            },
+        )
         content = status.build_status_content(state)
         self.assertNotIn("Total offline", [heading for heading, _ in content.sections])
         self.assertNotIn("Total online", [heading for heading, _ in content.sections])
@@ -84,15 +87,18 @@ class TimezoneTest(unittest.IsolatedAsyncioTestCase):
 
     def test_status_shows_only_the_period_that_just_ended(self):
         status = object.__new__(StatusCog)
-        state = cast(StatusState, {
-            "online": True,
-            "last_http_code": 200,
-            "last_response_time": 1,
-            "last_check": datetime(2026, 5, 1, 2, tzinfo=timezone.utc),
-            "continuous_online": 0,
-            "continuous_offline": 0,
-            "downtimes_count": 0,
-        })
+        state = cast(
+            StatusState,
+            {
+                "online": True,
+                "last_http_code": 200,
+                "last_response_time": 1,
+                "last_check": datetime(2026, 5, 1, 2, tzinfo=timezone.utc),
+                "continuous_online": 0,
+                "continuous_offline": 0,
+                "downtimes_count": 0,
+            },
+        )
         ordinary = status.build_status_content(state)
         self.assertFalse(
             any(name.startswith("Último período") for name, _ in ordinary.sections)
@@ -118,14 +124,17 @@ class TimezoneTest(unittest.IsolatedAsyncioTestCase):
         status.service = StatusService(None, max_gap_seconds=90)
         status.service.pending_failures = 1
         checked = datetime(2026, 5, 1, 2, tzinfo=timezone.utc)
-        state = cast(StatusState, {
-            "online": True,
-            "last_http_code": 503,
-            "last_response_time": 1,
-            "last_check": checked,
-            "continuous_online": 60,
-            "downtimes_count": 0,
-        })
+        state = cast(
+            StatusState,
+            {
+                "online": True,
+                "last_http_code": 503,
+                "last_response_time": 1,
+                "last_check": checked,
+                "continuous_online": 60,
+                "downtimes_count": 0,
+            },
+        )
         content = status.build_status_content(
             state, current_time=checked + timedelta(seconds=91)
         )

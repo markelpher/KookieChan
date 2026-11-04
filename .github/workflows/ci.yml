@@ -61,6 +61,14 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: Habilitar emulação ARM64
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Configurar Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Validar configuração do Compose
         run: |
           cp .env.example .env
@@ -73,6 +81,14 @@ jobs:
         run: |
           docker run --rm kookiechan:ci python -c \
             "import os, src.main, src.cogs.config, src.cogs.help, src.cogs.history, src.cogs.ping, src.cogs.presence, src.cogs.status, src.cogs.update; assert os.getuid() != 0; print('Imports e usuário não root: OK!')"
+
+      - name: Compilar imagem ARM64
+        run: docker buildx build --platform linux/arm64 --load --file docker/Dockerfile --tag kookiechan:ci-arm64 .
+
+      - name: Verificar imagem ARM64
+        run: |
+          docker run --rm --platform linux/arm64 kookiechan:ci-arm64 python -c \
+            "import os, src.main, src.cogs.config, src.cogs.help, src.cogs.history, src.cogs.ping, src.cogs.presence, src.cogs.status, src.cogs.update; assert os.getuid() != 0; print('Imports ARM64 e usuário não root: OK!')"
 
   release:
     name: Publicar release validada

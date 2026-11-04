@@ -112,7 +112,9 @@ class StatusMessageManager:
         if bot_user is None:
             return
         try:
-            async for message in channel.history(limit=STATUS_MESSAGE_HISTORY_SCAN_LIMIT):
+            async for message in channel.history(
+                limit=STATUS_MESSAGE_HISTORY_SCAN_LIMIT
+            ):
                 if message.id == current_message.id:
                     continue
                 if message.author.id != bot_user.id:
