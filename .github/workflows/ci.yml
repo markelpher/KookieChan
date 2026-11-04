@@ -74,13 +74,13 @@ jobs:
           cp .env.example .env
           docker compose -f docker/docker-compose.yml config --quiet
 
-      - name: Compilar imagem localmente
-        run: docker build --file docker/Dockerfile --tag kookiechan:ci .
+      - name: Compilar imagem AMD64
+        run: docker buildx build --platform linux/amd64 --load --file docker/Dockerfile --tag kookiechan:ci-amd64 .
 
-      - name: Verificar imports e usuário
+      - name: Verificar imagem AMD64
         run: |
-          docker run --rm kookiechan:ci python -c \
-            "import os, src.main, src.cogs.config, src.cogs.help, src.cogs.history, src.cogs.ping, src.cogs.presence, src.cogs.status, src.cogs.update; assert os.getuid() != 0; print('Imports e usuário não root: OK!')"
+          docker run --rm --platform linux/amd64 kookiechan:ci-amd64 python -c \
+            "import os, src.main, src.cogs.config, src.cogs.help, src.cogs.history, src.cogs.ping, src.cogs.presence, src.cogs.status, src.cogs.update; assert os.getuid() != 0; print('Imports AMD64 e usuário não root: OK!')"
 
       - name: Compilar imagem ARM64
         run: docker buildx build --platform linux/arm64 --load --file docker/Dockerfile --tag kookiechan:ci-arm64 .

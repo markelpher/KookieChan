@@ -101,9 +101,10 @@ class StatusMessageManager:
             return
 
         now = time.monotonic()
+        last_cleanup = getattr(self, "_last_status_history_cleanup", 0.0)
         if (
-            now - getattr(self, "_last_status_history_cleanup", 0.0)
-            < STATUS_HISTORY_CLEANUP_INTERVAL_SECONDS
+            last_cleanup
+            and now - last_cleanup < STATUS_HISTORY_CLEANUP_INTERVAL_SECONDS
         ):
             return
         self._last_status_history_cleanup = now

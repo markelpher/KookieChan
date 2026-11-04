@@ -124,7 +124,9 @@ class StatusCogFlowTest(unittest.IsolatedAsyncioTestCase):
 
         channel.history = history
 
-        await cog.cleanup_old_status_messages(channel, current)
+        with patch("src.ui.status_messages.time.monotonic", side_effect=[1.0, 2.0]):
+            await cog.cleanup_old_status_messages(channel, current)
+            await cog.cleanup_old_status_messages(channel, current)
 
         old_status.delete.assert_awaited_once_with()
         other_author.delete.assert_not_awaited()
