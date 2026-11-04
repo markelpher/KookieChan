@@ -62,12 +62,12 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Habilitar emulação ARM64
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
       - name: Configurar Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Validar configuração do Compose
         run: |
